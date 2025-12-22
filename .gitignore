@@ -1,0 +1,10 @@
+__pycache__/
+*.py[cod]
+.venv/
+.env
+*.db
+alembic/versions/__pycache__/
+docker-compose.override.yml
+.DS_Store
+.idea/
+*.log

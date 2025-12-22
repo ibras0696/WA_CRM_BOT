@@ -1,0 +1,6 @@
+whatsapp-chatbot-python
+sqlalchemy
+alembic
+pytest
+python-dotenv
+psycopg[binary]

@@ -1,0 +1,29 @@
+name: Test Suite
+
+on:
+  push:
+    branches: ["main"]
+  pull_request:
+    branches: ["main"]
+
+jobs:
+  make-test:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Prepare environment file
+        run: |
+          if [ -f .env.example ] && [ ! -f .env ]; then
+            cp .env.example .env
+          fi
+
+      - name: Show docker-compose version
+        run: docker-compose version
+
+      - name: Run tests via make
+        env:
+          TEST_DATABASE_URL: sqlite:///./tmp_test.db
+        run: make test

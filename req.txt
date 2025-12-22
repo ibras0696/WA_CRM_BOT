@@ -1,0 +1,12 @@
+certifi
+charset-normalizer
+idna
+importlib-metadata
+python-dotenv
+requests
+SQLAlchemy
+typing_extensions
+urllib3
+whatsapp-api-client-python
+whatsapp-chatbot-python
+zipp
