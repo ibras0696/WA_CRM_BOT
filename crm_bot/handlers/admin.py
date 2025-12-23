@@ -28,6 +28,7 @@ ADMIN_MENU_BUTTONS = [
     "Корректировка баланса",
     "Удалить сделку",
     "Отчёт",
+    "Отчёт за день",
 ]
 TODAY_DEALS_PREVIEW_LIMIT = 5
 CANCEL_KEYWORDS = {"отмена", "cancel", "выход", "stop"}
@@ -83,6 +84,12 @@ def admin_buttons_handler(notification: Notification, txt: str) -> None:
                 notification.sender,
                 AdminAnalyticsStates.MANAGER_REPORT.value,
             )
+        case "Отчёт за день":
+            try:
+                report = admin_service.build_today_summary()
+                notification.answer(report)
+            except Exception as exc:  # noqa: BLE001
+                notification.answer(str(exc))
         case _:
             notification.answer("Команда пока не поддерживается.")
 
@@ -90,7 +97,7 @@ def admin_buttons_handler(notification: Notification, txt: str) -> None:
 def admin_add_new_manager(notification: Notification) -> None:
     """FSM: добавление нового менеджера."""
     text = (notification.get_message_text() or "").strip()
-    if handle_menu_shortcut(notification, text):
+    if handle_menu_shortcut(notification, text, allow_worker=False):
         notification.state_manager.delete_state(notification.sender)
         return
     if not text:
@@ -114,7 +121,7 @@ def admin_add_new_manager(notification: Notification) -> None:
 def admin_delete_manager(notification: Notification) -> None:
     """FSM: деактивация менеджера."""
     text = (notification.get_message_text() or "").strip()
-    if handle_menu_shortcut(notification, text):
+    if handle_menu_shortcut(notification, text, allow_worker=False):
         notification.state_manager.delete_state(notification.sender)
         return
     if not text:
@@ -137,7 +144,7 @@ def admin_adjust_balance(notification: Notification) -> None:
     state = notification.state_manager.get_state(notification.sender)
     state_name = get_state_name(state)
     raw = notification.get_message_text().strip()
-    if handle_menu_shortcut(notification, raw):
+    if handle_menu_shortcut(notification, raw, allow_worker=False):
         notification.state_manager.delete_state(notification.sender)
         return
     if state_name == AdminAdjustBalanceStates.WORKER_PHONE.value:
@@ -166,11 +173,12 @@ def admin_adjust_balance(notification: Notification) -> None:
 def admin_delete_deal(notification: Notification) -> None:
     """FSM: soft-delete сделки."""
     raw = notification.get_message_text().strip()
-    if handle_menu_shortcut(notification, raw):
+    if handle_menu_shortcut(notification, raw, allow_worker=False):
         notification.state_manager.delete_state(notification.sender)
         return
+    cleaned = raw.lstrip("#").strip()
     try:
-        deal_id = int(raw)
+        deal_id = int(cleaned)
     except ValueError:
         notification.answer("ID сделки должно быть числом.")
         return
@@ -190,7 +198,7 @@ def admin_delete_deal(notification: Notification) -> None:
 def admin_manager_report(notification: Notification) -> None:
     """FSM: отчёт по периоду и (опционально) сотруднику."""
     text = notification.get_message_text().strip()
-    if handle_menu_shortcut(notification, text):
+    if handle_menu_shortcut(notification, text, allow_worker=False):
         notification.state_manager.delete_state(notification.sender)
         return
     if not text:
@@ -252,5 +260,16 @@ def _format_today_deals(limit: int = TODAY_DEALS_PREVIEW_LIMIT) -> str:
     for item in deals:
         worker_label = item.worker_name or item.worker_phone or "сотрудник не указан"
         amount = f"{item.total_amount:,.2f}".replace(",", " ")
-        lines.append(f"#{item.id} {item.client_name} — {amount} ({worker_label})")
+        method = _format_payment_method(item.payment_method)
+        comment = f" [{item.comment}]" if item.comment else ""
+        lines.append(f"#{item.id} {item.client_name} — {amount} [{method}] ({worker_label}){comment}")
     return "Сделки за сегодня:\n" + "\n".join(lines)
+
+
+def _format_payment_method(method) -> str:
+    if method and str(method) == "bank":
+        return "Банк"
+    if hasattr(method, "value"):
+        if method.value == "bank":
+            return "Банк"
+    return "Наличка"

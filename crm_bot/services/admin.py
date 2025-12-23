@@ -2,16 +2,20 @@
 
 from __future__ import annotations
 
-from datetime import datetime, date
+from datetime import datetime, date, timezone
+from zoneinfo import ZoneInfo
 from decimal import Decimal
 
 from sqlalchemy import func, case
 
 from crm_bot.core.db import db_session
-from crm_bot.core.models import Deal, User, UserRole
+from crm_bot.core.models import Deal, User, UserRole, DealPaymentMethod
 from crm_bot.services import users as user_service
 from crm_bot.services import shifts as shift_service
 from crm_bot.services import deals as deal_service
+from crm_bot.utils.timezones import adapt_datetime_for_db
+
+MOSCOW_TZ = ZoneInfo("Europe/Moscow")
 
 
 class AdminServiceError(Exception):
@@ -70,13 +74,19 @@ def build_deals_report(
     :return: текст отчёта
     :raises ValidationError: если сотрудник не найден
     """
+    start_dt = datetime.combine(start, datetime.min.time(), tzinfo=MOSCOW_TZ)
+    end_dt = datetime.combine(end, datetime.max.time(), tzinfo=MOSCOW_TZ)
+    start_utc = start_dt.astimezone(timezone.utc)
+    end_utc = end_dt.astimezone(timezone.utc)
+
     with db_session(session=session) as local:
-        start_dt = datetime.combine(start, datetime.min.time())
-        end_dt = datetime.combine(end, datetime.max.time())
+        normalized_start = adapt_datetime_for_db(start_utc, local.bind)
+        normalized_end = adapt_datetime_for_db(end_utc, local.bind)
+
         base_filters = [
             Deal.is_deleted.is_(False),
-            Deal.created_at >= start_dt,
-            Deal.created_at <= end_dt,
+            Deal.created_at >= normalized_start,
+            Deal.created_at <= normalized_end,
         ]
 
         filters = list(base_filters)
@@ -99,6 +109,8 @@ def build_deals_report(
             f"💸 Выдачи: {_format_money(summary.issued_sum)} (шт. {summary.issued_count})",
             f"↩️ Возвраты: {_format_money(summary.return_sum)} (шт. {summary.return_count})",
             f"🧮 Итог: {_format_money(summary.net_sum)}",
+            f"Наличка: {_format_money(summary.cash_sum)} (шт. {summary.cash_count})",
+            f"Банк: {_format_money(summary.bank_sum)} (шт. {summary.bank_count})",
         ]
 
         if worker:
@@ -127,7 +139,9 @@ def build_deals_report(
                     f"• {worker_label}: "
                     f"выдачи {_format_money(row.issued_sum)} (шт. {row.issued_count}), "
                     f"возвраты {_format_money(row.return_sum)} (шт. {row.return_count}), "
-                    f"итог {_format_money(row.net_sum)}"
+                    f"итог {_format_money(row.net_sum)} | "
+                    f"нал {_format_money(row.cash_sum)} (шт. {row.cash_count}) / "
+                    f"банк {_format_money(row.bank_sum)} (шт. {row.bank_count})"
                 )
         else:
             lines.append("По сотрудникам: нет сделок за период.")
@@ -159,4 +173,56 @@ def _aggregate_columns() -> tuple:
     ).label("return_count")
     net_sum = func.coalesce(func.sum(Deal.total_amount), 0).label("net_sum")
     total_count = func.count(Deal.id).label("total_count")
-    return total_count, net_sum, issued_sum, issued_count, return_sum, return_count
+    cash_sum = func.coalesce(
+        func.sum(
+            case(
+                (Deal.payment_method == DealPaymentMethod.CASH.value, Deal.total_amount),
+                else_=0,
+            )
+        ),
+        0,
+    ).label("cash_sum")
+    cash_count = func.coalesce(
+        func.sum(
+            case(
+                (Deal.payment_method == DealPaymentMethod.CASH.value, 1),
+                else_=0,
+            )
+        ),
+        0,
+    ).label("cash_count")
+    bank_sum = func.coalesce(
+        func.sum(
+            case(
+                (Deal.payment_method == DealPaymentMethod.BANK.value, Deal.total_amount),
+                else_=0,
+            )
+        ),
+        0,
+    ).label("bank_sum")
+    bank_count = func.coalesce(
+        func.sum(
+            case(
+                (Deal.payment_method == DealPaymentMethod.BANK.value, 1),
+                else_=0,
+            )
+        ),
+        0,
+    ).label("bank_count")
+    return (
+        total_count,
+        net_sum,
+        issued_sum,
+        issued_count,
+        return_sum,
+        return_count,
+        cash_sum,
+        cash_count,
+        bank_sum,
+        bank_count,
+    )
+
+
+def build_today_summary(session=None) -> str:
+    today = datetime.now(MOSCOW_TZ).date()
+    return build_deals_report(today, today, session=session)

@@ -17,6 +17,7 @@ from crm_bot.handlers.manage import (
     worker_buttons_handler,
     open_shift_step,
     deal_steps,
+    deal_details_step,
     WORKER_MENU_BUTTONS,
 )
 from crm_bot.handlers.menu import handle_menu_command
@@ -196,14 +197,14 @@ def adjust_balance(notification: Notification) -> None:
 )
 def delete_deal(notification: Notification) -> None:
     """FSM: soft-delete сделки по id."""
-    if not _is_authorized_admin(notification.sender):
+    if not is_authorized_admin(notification.sender):
         notification.answer("Недостаточно прав для выполнения команды.")
         return
     admin_delete_deal(notification)
 
 
 @bot.router.message(
-    state=States.OPEN_SHIFT_AMOUNT,
+    state=States.OPEN_SHIFT_AMOUNT.value,
     type_message=TEXT_TYPES,
 )
 def open_shift(notification: Notification) -> None:
@@ -212,20 +213,30 @@ def open_shift(notification: Notification) -> None:
 
 
 @bot.router.message(
-    state=States.DEAL_CLIENT_NAME,
-    type_message=TEXT_TYPES,
-)
-@bot.router.message(
-    state=States.DEAL_CLIENT_PHONE,
-    type_message=TEXT_TYPES,
-)
-@bot.router.message(
-    state=States.DEAL_AMOUNT,
+    state=States.DEAL_AMOUNT.value,
     type_message=TEXT_TYPES,
 )
 def deal_handler(notification: Notification) -> None:
-    """FSM: шаги создания сделки (имя → телефон → сумма)."""
+    """FSM: ввод суммы сделки и комментария."""
     deal_steps(notification)
+
+
+@bot.router.message(
+    state=States.DEAL_PAYMENT_METHOD.value,
+    type_message=TEXT_TYPES,
+)
+def deal_payment_handler(notification: Notification) -> None:
+    """FSM: выбор способа оплаты сделки."""
+    deal_steps(notification)
+
+
+@bot.router.message(
+    state=States.DEAL_DETAILS.value,
+    type_message=TEXT_TYPES,
+)
+def deal_details_handler(notification: Notification) -> None:
+    """FSM: ввод ID сделки из списка."""
+    deal_details_step(notification)
 
 
 @bot.router.message(

@@ -97,11 +97,11 @@ def test_worker_open_shift_pipeline(session, worker_user):
     notification = FakeNotification(sender=worker_user.phone, state_manager=state_manager)
 
     manage_handlers.worker_buttons_handler(notification, "Открыть смену")
-    assert state_manager.get_state(worker_user.phone) == States.OPEN_SHIFT_AMOUNT
+    assert state_manager.get_state(worker_user.phone) == States.OPEN_SHIFT_AMOUNT.value
 
     notification.set_message_text("150")
     manage_handlers.open_shift_step(notification)
-    assert notification.answers[-1] == "Смена открыта."
+    assert notification.answers[-1] == "✅ Смена открыта. Можно создавать сделки."
 
     session.expire_all()
     shift = (
@@ -122,24 +122,20 @@ def test_worker_deal_pipeline(session, worker_user):
     notification = FakeNotification(sender=worker_user.phone, state_manager=state_manager)
 
     manage_handlers.worker_buttons_handler(notification, "Новая сделка")
-    assert state_manager.get_state(worker_user.phone) == States.DEAL_CLIENT_NAME
+    assert state_manager.get_state(worker_user.phone) == States.DEAL_AMOUNT.value
 
-    notification.set_message_text("Иван")
+    notification.set_message_text("+120 Продажа")
     manage_handlers.deal_steps(notification)
-    assert state_manager.get_state(worker_user.phone) == States.DEAL_CLIENT_PHONE
+    assert state_manager.get_state(worker_user.phone) == States.DEAL_PAYMENT_METHOD.value
 
-    notification.set_message_text("70000000001@c.us")
-    manage_handlers.deal_steps(notification)
-    assert state_manager.get_state(worker_user.phone) == States.DEAL_AMOUNT
-
-    notification.set_message_text("120")
+    notification.set_message_text("Наличка")
     manage_handlers.deal_steps(notification)
     assert "Сделка #" in notification.answers[-1]
 
     session.expire_all()
     deal = session.query(Deal).one()
-    assert deal.client_name == "Иван"
     assert deal.total_amount == Decimal("120")
+    assert deal.payment_method.value == "cash"
     assert deal.is_deleted is False
 
 
@@ -157,11 +153,9 @@ def test_worker_balance_and_deals_menu(session, worker_user):
     sm_deal = DummyStateManager()
     notif_deal = FakeNotification(worker_user.phone, state_manager=sm_deal)
     manage_handlers.worker_buttons_handler(notif_deal, "Новая сделка")
-    notif_deal.set_message_text("Тест Клиент")
+    notif_deal.set_message_text("+150 Тест")
     manage_handlers.deal_steps(notif_deal)
-    notif_deal.set_message_text("70000000000@c.us")
-    manage_handlers.deal_steps(notif_deal)
-    notif_deal.set_message_text("150")
+    notif_deal.set_message_text("Банк")
     manage_handlers.deal_steps(notif_deal)
 
     notification = FakeNotification(sender=worker_user.phone, state_manager=DummyStateManager())
@@ -169,7 +163,7 @@ def test_worker_balance_and_deals_menu(session, worker_user):
     assert "Текущий лимит" in notification.answers[-1]
 
     manage_handlers.worker_buttons_handler(notification, "Мои сделки")
-    assert "Последние сделки" in notification.answers[-1]
+    assert any("Последние сделки" in msg for msg in notification.answers)
 
 
 @pytest.mark.usefixtures("keyboard_spy")
@@ -234,8 +228,8 @@ def test_admin_report_flow(session, admin_user, worker_user):
 
     notification.set_message_text(f"2025-01-01 2025-12-31 {worker_user.phone}")
     admin_handlers.admin_manager_report(notification)
-    assert "Сделок: 2" in notification.answers[-1]
-    assert "Выдано:" in notification.answers[-1]
+    assert "Всего сделок: 2" in notification.answers[-1]
+    assert "💸 Выдачи" in notification.answers[-1]
 
 
 def test_menu_handler_routes_to_admin(monkeypatch, admin_user):
@@ -303,7 +297,7 @@ def test_menu_handler_returns_help_on_explicit_request(monkeypatch, worker_user)
     notification.set_message_text("help")
     menu_handlers.handle_menu_command(notification)
 
-    assert notification.answers[-1] == menu_handlers.MENU_HELP_TEXT
+    assert notification.answers[-1] == menu_handlers.FULL_HELP_TEXT
 
 
 def test_menu_handler_ignores_random_text(monkeypatch, worker_user):
@@ -326,7 +320,7 @@ def test_menu_handler_resets_state_when_menu_command(monkeypatch, worker_user):
 
     state_manager = DummyStateManager()
     notification = FakeNotification(sender=worker_user.phone, state_manager=state_manager)
-    state_manager.set_state(worker_user.phone, States.DEAL_AMOUNT)
+    state_manager.set_state(worker_user.phone, States.DEAL_AMOUNT.value)
     notification.set_message_text("1")
     menu_handlers.handle_menu_command(notification)
 
@@ -338,9 +332,9 @@ def test_menu_handler_keeps_state_on_random_text(monkeypatch, worker_user):
     """Произвольный текст в FSM игнорируется и состояние сохраняется."""
     state_manager = DummyStateManager()
     notification = FakeNotification(sender=worker_user.phone, state_manager=state_manager)
-    state_manager.set_state(worker_user.phone, States.DEAL_AMOUNT)
+    state_manager.set_state(worker_user.phone, States.DEAL_AMOUNT.value)
     notification.set_message_text("bla-bla")
     menu_handlers.handle_menu_command(notification)
 
-    assert state_manager.get_state(worker_user.phone) == States.DEAL_AMOUNT
+    assert state_manager.get_state(worker_user.phone) == States.DEAL_AMOUNT.value
     assert notification.answers == []

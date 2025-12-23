@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from datetime import datetime
+from zoneinfo import ZoneInfo
 from decimal import Decimal
 
 from crm_bot.core.db import db_session
@@ -101,12 +102,15 @@ def open_shift(worker: User, opening_balance: float | int | str | Decimal, sessi
         return shift
 
 
-def close_open_shifts() -> int:
+MOSCOW_TZ = ZoneInfo("Europe/Moscow")
+
+
+def close_open_shifts(now: datetime | None = None) -> int:
     """Закрывает все активные смены (используется в автозакрытии).
 
     :return: количество закрытых смен
     """
-    now = datetime.utcnow()
+    current = now or datetime.now(MOSCOW_TZ)
     with db_session() as session:
         opened = (
             session.query(Shift)
@@ -115,7 +119,7 @@ def close_open_shifts() -> int:
         )
         for shift in opened:
             shift.status = ShiftStatus.CLOSED
-            shift.closed_at = now
+            shift.closed_at = current
         return len(opened)
 
 
@@ -151,3 +155,18 @@ def adjust_balance(
         local.add(tx)
         local.flush()
         return current_shift
+
+
+def get_last_closed_shift(worker_id: int, session=None) -> Shift | None:
+    """Возвращает последнюю закрытую смену сотрудника."""
+    with db_session(session=session) as local:
+        return (
+            local.query(Shift)
+            .filter(
+                Shift.worker_id == worker_id,
+                Shift.status == ShiftStatus.CLOSED,
+                Shift.closed_at.isnot(None),
+            )
+            .order_by(Shift.closed_at.desc())
+            .first()
+        )

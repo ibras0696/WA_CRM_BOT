@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import datetime, date
+from datetime import datetime, timezone
 from decimal import Decimal
 from typing import Iterable, List
 
@@ -14,12 +14,14 @@ from crm_bot.core.models import (
     CashTransaction,
     CashTransactionType,
     Deal,
+    DealPaymentMethod,
     Shift,
     ShiftStatus,
     User,
     UserRole,
 )
-from crm_bot.services.shifts import NoActiveShift, _as_decimal
+from crm_bot.services.shifts import NoActiveShift, _as_decimal, MOSCOW_TZ
+from crm_bot.utils.timezones import adapt_datetime_for_db
 
 
 class DealServiceError(Exception):
@@ -42,6 +44,8 @@ class DealBrief:
     created_at: datetime
     worker_phone: str | None
     worker_name: str | None
+    payment_method: DealPaymentMethod | None
+    comment: str | None
 
 
 def create_deal(
@@ -49,14 +53,16 @@ def create_deal(
     client_name: str,
     client_phone: str | None,
     total_amount: float | int | str | Decimal,
+    payment_method: DealPaymentMethod | None = None,
+    comment: str | None = None,
     session=None,
 ) -> Deal:
-    """Создаёт сделку с проверкой лимита смены.
+    """Создаёт сделку с изменением текущего баланса смены.
 
     :param worker: сотрудник
     :param client_name: имя клиента
     :param client_phone: телефон клиента (опционально)
-    :param total_amount: сумма выдачи
+    :param total_amount: сумма операции (`+` пополнение, `-` списание)
     :return: Deal
     :raises ValidationError: если данные некорректны или лимит недостаточен
     :raises NoActiveShift: если нет активной смены
@@ -65,6 +71,7 @@ def create_deal(
     if amount == 0:
         raise ValidationError("Сумма сделки должна быть отлична от 0.")
     normalized_client_name = (client_name or "Без имени").strip() or "Без имени"
+    normalized_comment = (comment or "").strip() or None
 
     with db_session(session=session) as local:
         shift: Shift | None = (
@@ -77,8 +84,10 @@ def create_deal(
         )
         if not shift:
             raise NoActiveShift("Сначала открой смену.")
-        if amount > 0 and shift.current_balance < amount:
-            raise ValidationError("Недостаточно лимита для выдачи.")
+
+        current_balance = Decimal(shift.current_balance or 0)
+        if amount < 0 and current_balance + amount < 0:
+            raise ValidationError("Недостаточно лимита для списания.")
 
         deal = Deal(
             worker_id=worker.id,
@@ -86,12 +95,15 @@ def create_deal(
             client_name=normalized_client_name,
             client_phone=(client_phone or "").strip() or None,
             total_amount=amount,
+            payment_method=payment_method or DealPaymentMethod.CASH,
+            comment=normalized_comment,
         )
         local.add(deal)
         local.flush()
 
-        balance_delta = -amount
-        shift.current_balance = (shift.current_balance or 0) + balance_delta
+        new_balance = current_balance + amount
+        shift.current_balance = new_balance
+        balance_delta = amount
         tx = CashTransaction(
             worker_id=worker.id,
             shift_id=shift.id,
@@ -145,6 +157,20 @@ def list_worker_deals(worker: User, limit: int = 5, session=None) -> Iterable[De
         )
 
 
+def get_worker_deal(worker: User, deal_id: int, session=None) -> Deal | None:
+    """Возвращает конкретную сделку сотрудника."""
+    with db_session(session=session) as local:
+        return (
+            local.query(Deal)
+            .filter(
+                Deal.id == deal_id,
+                Deal.worker_id == worker.id,
+                Deal.is_deleted.is_(False),
+            )
+            .one_or_none()
+        )
+
+
 def get_active_balance(worker: User, session=None) -> Decimal:
     """Возвращает текущий баланс активной смены.
 
@@ -168,8 +194,13 @@ def get_active_balance(worker: User, session=None) -> Decimal:
 
 def list_today_deals(limit: int = 5, session=None) -> List[DealBrief]:
     """Возвращает последние сделки за сегодняшний день (для админа)."""
-    today = date.today()
+    today = datetime.now(MOSCOW_TZ).date()
+    start = datetime.combine(today, datetime.min.time(), tzinfo=MOSCOW_TZ).astimezone(timezone.utc)
+    end = datetime.combine(today, datetime.max.time(), tzinfo=MOSCOW_TZ).astimezone(timezone.utc)
+
     with db_session(session=session) as local:
+        normalized_start = adapt_datetime_for_db(start, local.bind)
+        normalized_end = adapt_datetime_for_db(end, local.bind)
         rows = (
             local.query(
                 Deal.id,
@@ -178,11 +209,14 @@ def list_today_deals(limit: int = 5, session=None) -> List[DealBrief]:
                 Deal.created_at,
                 User.phone.label("worker_phone"),
                 User.name.label("worker_name"),
+                Deal.payment_method,
+                Deal.comment,
             )
             .outerjoin(User, User.id == Deal.worker_id)
             .filter(
                 Deal.is_deleted.is_(False),
-                func.date(Deal.created_at) == today,
+                Deal.created_at >= normalized_start,
+                Deal.created_at <= normalized_end,
             )
             .order_by(Deal.created_at.desc())
             .limit(limit)
@@ -200,6 +234,8 @@ def list_today_deals(limit: int = 5, session=None) -> List[DealBrief]:
                     created_at=row.created_at,
                     worker_phone=row.worker_phone,
                     worker_name=row.worker_name,
+                    payment_method=row.payment_method,
+                    comment=row.comment,
                 )
             )
         return brief_list

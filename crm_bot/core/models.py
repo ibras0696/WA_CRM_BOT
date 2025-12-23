@@ -42,6 +42,13 @@ class CashTransactionType(str, enum.Enum):
     ADJUSTMENT = "ADJUSTMENT"
 
 
+class DealPaymentMethod(str, enum.Enum):
+    """Способ оплаты сделки."""
+
+    CASH = "cash"
+    BANK = "bank"
+
+
 class User(Base):
     """Пользователь (админ или сотрудник)."""
 
@@ -125,6 +132,16 @@ class Deal(Base):
     client_name = Column(String(255), nullable=False)
     client_phone = Column(String(32))
     total_amount = Column(Numeric(12, 2), nullable=False)
+    payment_method = Column(
+        Enum(
+            DealPaymentMethod,
+            name="deal_payment_method",
+            values_callable=lambda enum: [e.value for e in enum],
+        ),
+        nullable=False,
+        server_default=DealPaymentMethod.CASH.value,
+    )
+    comment = Column(String(255))
     created_at = Column(
         DateTime(timezone=True),
         server_default=func.now(),

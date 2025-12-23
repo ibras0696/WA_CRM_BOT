@@ -5,11 +5,29 @@ from __future__ import annotations
 from typing import Any
 
 
+def _plain_state(value: Any) -> Any:
+    """Преобразует enum/state-объекты к строковому значению."""
+    if value is None:
+        return None
+    if hasattr(value, "value"):
+        try:
+            return value.value
+        except Exception:  # noqa: BLE001
+            pass
+    if hasattr(value, "name"):
+        try:
+            return value.name
+        except Exception:  # noqa: BLE001
+            pass
+    return value
+
+
 def get_state_name(state: Any) -> str | None:
     """Возвращает строковое имя состояния независимо от реализации."""
     if not state:
         return None
-    return getattr(state, "name", state)
+    plain = _plain_state(state)
+    return plain
 
 
 def switch_state(notification, state_name: str) -> None:
@@ -17,10 +35,11 @@ def switch_state(notification, state_name: str) -> None:
     manager = getattr(notification, "state_manager", None)
     if not manager:
         return
+    plain_state = _plain_state(state_name)
 
     updater = getattr(manager, "update_state", None)
     if callable(updater):
-        updater(notification.sender, state_name)
+        updater(notification.sender, plain_state)
         return
 
     setter = getattr(manager, "set_state", None)
@@ -35,7 +54,7 @@ def switch_state(notification, state_name: str) -> None:
         except Exception:  # noqa: BLE001
             data_snapshot = None
 
-    setter(notification.sender, state_name)
+    setter(notification.sender, plain_state)
 
     if not data_snapshot:
         return
