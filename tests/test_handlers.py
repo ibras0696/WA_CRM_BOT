@@ -9,6 +9,7 @@ import pytest
 from crm_bot.core.models import Deal, Shift, ShiftStatus, User, UserRole
 from crm_bot.handlers import admin as admin_handlers
 from crm_bot.handlers import manage as manage_handlers
+from crm_bot.handlers import menu as menu_handlers
 from crm_bot.services import shifts as shift_service
 from crm_bot.services import deals as deal_service
 from crm_bot.states.admin import (
@@ -235,3 +236,111 @@ def test_admin_report_flow(session, admin_user, worker_user):
     admin_handlers.admin_manager_report(notification)
     assert "Сделок: 2" in notification.answers[-1]
     assert "Выдано:" in notification.answers[-1]
+
+
+def test_menu_handler_routes_to_admin(monkeypatch, admin_user):
+    """Текст '0' от админа запускает меню."""
+    from crm_bot.utils import auth
+
+    auth.AUTHORIZED_ADMIN_SENDERS.clear()
+    auth.AUTHORIZED_ADMIN_SENDERS.add(admin_user.phone)
+
+    calls = {}
+
+    def fake_admin_menu(notification):
+        calls["admin"] = notification.sender
+
+    monkeypatch.setattr(menu_handlers, "admin_menu_handler", fake_admin_menu)
+
+    notification = FakeNotification(sender=admin_user.phone)
+    notification.set_message_text("0")
+    menu_handlers.handle_menu_command(notification)
+
+    assert calls["admin"] == admin_user.phone
+
+
+def test_menu_handler_blocks_foreign_admin(monkeypatch):
+    """Посторонний номер получает отказ на '0'."""
+    from crm_bot.utils import auth
+
+    auth.AUTHORIZED_ADMIN_SENDERS.clear()
+
+    notification = FakeNotification(sender="70000000099@c.us")
+    notification.set_message_text("0")
+    menu_handlers.handle_menu_command(notification)
+
+    assert notification.answers[-1] == menu_handlers.ADMIN_FORBIDDEN_TEXT
+
+
+def test_menu_handler_routes_to_worker(monkeypatch, worker_user):
+    """Текст '1' от активного сотрудника открывает меню сотрудника."""
+    calls = {}
+
+    def fake_worker_menu(notification):
+        calls["worker"] = notification.sender
+
+    monkeypatch.setattr(menu_handlers, "manage_menu_handler", fake_worker_menu)
+
+    notification = FakeNotification(sender=worker_user.phone)
+    notification.set_message_text("1")
+    menu_handlers.handle_menu_command(notification)
+
+    assert calls["worker"] == worker_user.phone
+
+
+def test_menu_handler_blocks_unknown_worker(monkeypatch):
+    """Неавторизованный номер получает подсказку при запросе меню сотрудника."""
+    notification = FakeNotification(sender="79999999999@c.us")
+    notification.set_message_text("1")
+    menu_handlers.handle_menu_command(notification)
+
+    assert notification.answers[-1] == menu_handlers.WORKER_FORBIDDEN_TEXT
+
+
+def test_menu_handler_returns_help_on_explicit_request(monkeypatch, worker_user):
+    """Команда help возвращает подсказку."""
+    notification = FakeNotification(sender=worker_user.phone)
+    notification.set_message_text("help")
+    menu_handlers.handle_menu_command(notification)
+
+    assert notification.answers[-1] == menu_handlers.MENU_HELP_TEXT
+
+
+def test_menu_handler_ignores_random_text(monkeypatch, worker_user):
+    """Посторонние сообщения без состояния игнорируются."""
+    notification = FakeNotification(sender=worker_user.phone)
+    notification.set_message_text("hello")
+    menu_handlers.handle_menu_command(notification)
+
+    assert notification.answers == []
+
+
+def test_menu_handler_resets_state_when_menu_command(monkeypatch, worker_user):
+    """Команда '1' в состоянии FSM сбрасывает процесс и открывает меню."""
+    calls = {}
+
+    def fake_worker_menu(notification):
+        calls["worker"] = notification.sender
+
+    monkeypatch.setattr(menu_handlers, "manage_menu_handler", fake_worker_menu)
+
+    state_manager = DummyStateManager()
+    notification = FakeNotification(sender=worker_user.phone, state_manager=state_manager)
+    state_manager.set_state(worker_user.phone, States.DEAL_AMOUNT)
+    notification.set_message_text("1")
+    menu_handlers.handle_menu_command(notification)
+
+    assert calls["worker"] == worker_user.phone
+    assert state_manager.get_state(worker_user.phone) is None
+
+
+def test_menu_handler_keeps_state_on_random_text(monkeypatch, worker_user):
+    """Произвольный текст в FSM игнорируется и состояние сохраняется."""
+    state_manager = DummyStateManager()
+    notification = FakeNotification(sender=worker_user.phone, state_manager=state_manager)
+    state_manager.set_state(worker_user.phone, States.DEAL_AMOUNT)
+    notification.set_message_text("bla-bla")
+    menu_handlers.handle_menu_command(notification)
+
+    assert state_manager.get_state(worker_user.phone) == States.DEAL_AMOUNT
+    assert notification.answers == []

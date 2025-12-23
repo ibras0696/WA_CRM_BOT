@@ -1,5 +1,6 @@
 """Тесты сервиса сделок."""
 
+from datetime import timedelta
 import pytest
 from decimal import Decimal
 
@@ -22,3 +23,18 @@ def test_create_deal_insufficient_balance(session, worker_user):
 def test_create_deal_no_shift(session, worker_user):
     with pytest.raises(shifts.NoActiveShift):
         deals.create_deal(worker_user, "Клиент", None, 10, session=session)
+
+
+def test_list_today_deals_filters_old_entries(session, worker_user):
+    """В обзоре удаления показываются только сделки за сегодня."""
+    shifts.open_shift(worker_user, 500, session=session)
+    deal_today = deals.create_deal(worker_user, "Сегодня", None, 100, session=session)
+    deal_old = deals.create_deal(worker_user, "Вчера", None, 50, session=session)
+    deal_old.created_at = deal_old.created_at - timedelta(days=1)
+    session.commit()
+
+    items = deals.list_today_deals(limit=10, session=session)
+    ids = [item.id for item in items]
+
+    assert deal_today.id in ids
+    assert deal_old.id not in ids

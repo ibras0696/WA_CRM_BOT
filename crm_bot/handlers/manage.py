@@ -1,3 +1,5 @@
+import logging
+
 from whatsapp_chatbot_python import Notification
 
 from crm_bot.keyboards.base_kb import base_wa_kb_sender
@@ -5,6 +7,7 @@ from crm_bot.services import deals as deal_service
 from crm_bot.services import shifts as shift_service
 from crm_bot.services import users as user_service
 from crm_bot.states.states import States
+from crm_bot.utils.fsm import get_state_name, switch_state
 
 WORKER_MENU_BUTTONS = [
     "Открыть смену",
@@ -15,6 +18,7 @@ WORKER_MENU_BUTTONS = [
 
 
 def manage_menu_handler(notification: Notification) -> None:
+    logging.debug("sending worker menu to %s", notification.sender)
     base_wa_kb_sender(
         notification.sender,
         body="Менеджер Панель",
@@ -25,6 +29,11 @@ def manage_menu_handler(notification: Notification) -> None:
 
 def worker_buttons_handler(notification: Notification, txt: str) -> None:
     """Реакция на кнопки в меню сотрудника."""
+    worker = user_service.get_active_user_by_phone(notification.sender)
+    if not worker:
+        notification.answer("Нет доступа. Доступ выдаёт администратор.")
+        return
+    logging.debug("worker button handler triggered: sender=%s text=%s", notification.sender, txt)
     match txt:
         case "Открыть смену":
             notification.state_manager.set_state(
@@ -64,29 +73,26 @@ def open_shift_step(notification: Notification) -> None:
 def deal_steps(notification: Notification) -> None:
     """FSM шаги создания сделки."""
     state = notification.state_manager.get_state(notification.sender)
+    state_name = get_state_name(state)
     text = notification.get_message_text().strip()
 
-    if state == States.DEAL_CLIENT_NAME:
+    if state_name == States.DEAL_CLIENT_NAME:
         notification.state_manager.update_state_data(
             notification.sender, {"client_name": text}
         )
-        notification.state_manager.set_state(
-            notification.sender, States.DEAL_CLIENT_PHONE
-        )
+        switch_state(notification, States.DEAL_CLIENT_PHONE)
         notification.answer("Телефон клиента (опционально):")
         return
 
     data = notification.state_manager.get_state_data(notification.sender) or {}
-    if state == States.DEAL_CLIENT_PHONE:
+    if state_name == States.DEAL_CLIENT_PHONE:
         data["client_phone"] = text
         notification.state_manager.update_state_data(notification.sender, data)
-        notification.state_manager.set_state(
-            notification.sender, States.DEAL_AMOUNT
-        )
-        notification.answer("Сумма выдачи:")
+        switch_state(notification, States.DEAL_AMOUNT)
+        notification.answer("Сумма операции (можно с + или -):")
         return
 
-    if state == States.DEAL_AMOUNT:
+    if state_name == States.DEAL_AMOUNT:
         client_name = data.get("client_name")
         client_phone = data.get("client_phone")
         amount = text

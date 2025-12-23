@@ -16,20 +16,31 @@ class ValidationError(UserServiceError):
     """Ошибки валидации входных данных."""
 
 
-PHONE_PATTERN = re.compile(r"^7\d{10}@c\.us$")
+PHONE_PATTERN = re.compile(r"^7\d{10}$")
 
 
 def normalize_phone(raw_phone: str) -> str:
-    """Проверяет формат телефона.
+    """Проверяет формат телефона и добавляет домен @c.us при необходимости.
 
-    :param raw_phone: строка вида 7XXXXXXXXXX@c.us
-    :return: нормализованный номер
+    :param raw_phone: строка вида 7XXXXXXXXXX или с суффиксом @c.us
+    :return: нормализованный номер 7XXXXXXXXXX@c.us
     :raises ValidationError: если формат неверный
     """
     phone = (raw_phone or "").strip()
-    if not PHONE_PATTERN.match(phone):
-        raise ValidationError("Номер должен быть в формате 7XXXXXXXXXX@c.us")
-    return phone
+    if not phone:
+        raise ValidationError("Номер должен быть в формате 7XXXXXXXXXX.")
+
+    if phone.lower().endswith("@c.us"):
+        phone = phone[:-5]
+
+    digits = re.sub(r"\D", "", phone)
+    if digits.startswith("8") and len(digits) == 11:
+        digits = "7" + digits[1:]
+
+    if not PHONE_PATTERN.match(digits):
+        raise ValidationError("Номер должен быть в формате 7XXXXXXXXXX.")
+
+    return f"{digits}@c.us"
 
 
 def get_active_user_by_phone(phone: str, session=None) -> User | None:

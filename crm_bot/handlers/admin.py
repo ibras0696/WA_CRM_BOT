@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 from datetime import date, datetime
 
 from whatsapp_chatbot_python import Notification
@@ -10,6 +11,7 @@ from crm_bot.config import settings
 from crm_bot.keyboards.base_kb import base_wa_kb_sender
 from crm_bot.services import admin as admin_service
 from crm_bot.services import users as user_service
+from crm_bot.services import deals as deal_service
 from crm_bot.states.admin import (
     AdminAddManagerStates,
     AdminAdjustBalanceStates,
@@ -17,6 +19,7 @@ from crm_bot.states.admin import (
     AdminDeleteDealStates,
     AdminDeleteManagerStates,
 )
+from crm_bot.utils.fsm import get_state_name, switch_state
 
 ADMIN_MENU_BUTTONS = [
     "Добавить сотрудника",
@@ -25,10 +28,12 @@ ADMIN_MENU_BUTTONS = [
     "Удалить сделку",
     "Отчёт",
 ]
+TODAY_DEALS_PREVIEW_LIMIT = 5
 
 
 def admin_menu_handler(notification: Notification) -> None:
     """Отправляет основное меню администратора."""
+    logging.debug("sending admin menu to %s", notification.sender)
     base_wa_kb_sender(
         notification.sender,
         body="Админ Панель",
@@ -39,9 +44,10 @@ def admin_menu_handler(notification: Notification) -> None:
 
 def admin_buttons_handler(notification: Notification, txt: str) -> None:
     """Реакция на нажатие кнопок админа."""
+    logging.debug("admin button handler triggered: sender=%s text=%s", notification.sender, txt)
     match txt:
         case "Добавить сотрудника":
-            notification.answer("Введите номер сотрудника 7XXXXXXXXXX@c.us")
+            notification.answer("Введите номер сотрудника в формате 7XXXXXXXXXX.")
             notification.state_manager.set_state(
                 notification.sender,
                 AdminAddManagerStates.SENDER.value,
@@ -59,16 +65,16 @@ def admin_buttons_handler(notification: Notification, txt: str) -> None:
                 AdminAdjustBalanceStates.WORKER_PHONE.value,
             )
         case "Удалить сделку":
-            notification.answer("Введите id сделки для soft-delete.")
+            notification.answer(_prepare_delete_deals_prompt())
             notification.state_manager.set_state(
                 notification.sender,
                 AdminDeleteDealStates.DEAL_ID.value,
             )
         case "Отчёт":
             notification.answer(
-                "Укажите период отчёта в формате YYYY-MM-DD YYYY-MM-DD "
-                "и (опционально) номер сотрудника.\n"
-                "Пример: 2025-01-01 2025-01-31 79991234567@c.us"
+                "Введите даты отчёта: начало и (опционально) конец + номер сотрудника.\n"
+                "Формат: YYYY-MM-DD [YYYY-MM-DD] [номер]\n"
+                "Пример: 2025-01-01 2025-01-31 79991234567"
             )
             notification.state_manager.set_state(
                 notification.sender,
@@ -80,7 +86,7 @@ def admin_buttons_handler(notification: Notification, txt: str) -> None:
 
 def admin_add_new_manager(notification: Notification) -> None:
     """FSM: добавление нового менеджера."""
-    text = notification.get_message_text().strip()
+    text = (notification.get_message_text() or "").strip()
     if not text:
         notification.answer("Номер не должен быть пустым.")
         return
@@ -101,7 +107,7 @@ def admin_add_new_manager(notification: Notification) -> None:
 
 def admin_delete_manager(notification: Notification) -> None:
     """FSM: деактивация менеджера."""
-    text = notification.get_message_text().strip()
+    text = (notification.get_message_text() or "").strip()
     if not text:
         notification.answer("Номер не должен быть пустым.")
         return
@@ -120,14 +126,14 @@ def admin_delete_manager(notification: Notification) -> None:
 def admin_adjust_balance(notification: Notification) -> None:
     """FSM: ввод суммы корректировки."""
     state = notification.state_manager.get_state(notification.sender)
+    state_name = get_state_name(state)
     raw = notification.get_message_text().strip()
-    if state == AdminAdjustBalanceStates.WORKER_PHONE.value:
+    if state_name == AdminAdjustBalanceStates.WORKER_PHONE.value:
         notification.state_manager.update_state_data(
-            notification.sender, {"worker_phone": raw}
+            notification.sender,
+            {"worker_phone": raw},
         )
-        notification.state_manager.set_state(
-            notification.sender, AdminAdjustBalanceStates.DELTA.value
-        )
+        switch_state(notification, AdminAdjustBalanceStates.DELTA.value)
         notification.answer("Введите дельту (+/-) в рублях.")
         return
 
@@ -202,3 +208,24 @@ def _parse_date(raw: str) -> date:
         return datetime.fromisoformat(raw).date()
     except ValueError:
         raise ValueError("Дата должна быть в формате YYYY-MM-DD") from None
+
+
+def _prepare_delete_deals_prompt() -> str:
+    preview = _format_today_deals()
+    return (
+        "Введите ID сделки для удаления (число).\n"
+        f"{preview}"
+    )
+
+
+def _format_today_deals(limit: int = TODAY_DEALS_PREVIEW_LIMIT) -> str:
+    deals = deal_service.list_today_deals(limit=limit)
+    if not deals:
+        return "За сегодня сделок ещё нет."
+
+    lines = []
+    for item in deals:
+        worker_label = item.worker_name or item.worker_phone or "сотрудник не указан"
+        amount = f"{item.total_amount:,.2f}".replace(",", " ")
+        lines.append(f"#{item.id} {item.client_name} — {amount} ({worker_label})")
+    return "Сделки за сегодня:\n" + "\n".join(lines)

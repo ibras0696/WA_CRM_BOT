@@ -11,16 +11,15 @@ from crm_bot.handlers.admin import (
     admin_delete_manager,
     admin_delete_deal,
     admin_manager_report,
-    admin_menu_handler,
     admin_adjust_balance,
 )
 from crm_bot.handlers.manage import (
-    manage_menu_handler,
     worker_buttons_handler,
     open_shift_step,
     deal_steps,
     WORKER_MENU_BUTTONS,
 )
+from crm_bot.handlers.menu import handle_menu_command
 from crm_bot.states.admin import (
     AdminAddManagerStates,
     AdminAdjustBalanceStates,
@@ -29,8 +28,13 @@ from crm_bot.states.admin import (
     AdminDeleteManagerStates,
 )
 from crm_bot.states.states import States
+from crm_bot.utils.auth import is_authorized_admin
 
-AUTHORIZED_ADMIN_SENDERS = set(settings.admin_phones or [])
+logging.basicConfig(
+    level=logging.DEBUG if settings.bot_debug else logging.INFO,
+    format="%(asctime)s:crm_bot:%(levelname)s:%(message)s",
+)
+logger = logging.getLogger(__name__)
 
 bot = GreenAPIBot(
     settings.id_instance,
@@ -45,27 +49,6 @@ BUTTON_PAYLOAD_KEYS = (
     "templateButtonsReplyMessage",
 )
 
-
-def _is_authorized_admin(sender: str) -> bool:
-    """Простая проверка на доступ к административным сценариям."""
-    return sender in AUTHORIZED_ADMIN_SENDERS
-
-
-def _handle_menu_command(notification: Notification) -> None:
-    """Общая логика обработки текстовых команд."""
-    txt = notification.get_message_text()
-    match txt:
-        case "0":  # Админская панель
-            if _is_authorized_admin(notification.sender):
-                admin_menu_handler(notification)
-        case "1":  # Менеджерская панель
-            manage_menu_handler(notification)
-        case _:
-            # notification.answer(f"Тест: {notification.sender}")
-            pass
-            # notification.answer("Отправьте 0 (админ) или 1 (меню сотрудника).")
-
-
 def _get_button_payload(notification: Notification) -> dict:
     message_data = notification.event.get("messageData", {}) or {}
     for key in BUTTON_PAYLOAD_KEYS:
@@ -75,7 +58,13 @@ def _get_button_payload(notification: Notification) -> dict:
     return {}
 
 
-def _extract_button_text(payload: dict) -> str:
+def _extract_button_info(payload: dict) -> tuple[str | None, str]:
+    button_id = (
+        payload.get("selectedButtonId")
+        or payload.get("selectedId")
+        or payload.get("buttonId")
+        or payload.get("id")
+    )
     candidates: list[str | None] = [
         payload.get("selectedDisplayText"),
         payload.get("displayText"),
@@ -87,25 +76,30 @@ def _extract_button_text(payload: dict) -> str:
     if isinstance(selected_button_text, dict):
         candidates.append(selected_button_text.get("displayText"))
         candidates.append(selected_button_text.get("text"))
+    elif isinstance(selected_button_text, str):
+        candidates.append(selected_button_text)
     button_text = payload.get("buttonText")
     if isinstance(button_text, dict):
         candidates.append(button_text.get("displayText"))
         candidates.append(button_text.get("text"))
+    elif isinstance(button_text, str):
+        candidates.append(button_text)
     for value in candidates:
         if isinstance(value, str) and value.strip():
-            return value.strip()
-    return ""
+            return button_id, value.strip()
+    return button_id, ""
 
 
 def _handle_button_payload(notification: Notification) -> None:
     """Общая логика разбора payload от кнопок."""
     payload = _get_button_payload(notification)
-    txt = _extract_button_text(payload)
-    logging.debug(
-        "button payload: sender=%s raw=%s extracted=%s",
+    button_id, txt = _extract_button_info(payload)
+    logger.debug(
+        "button payload: sender=%s id=%s text=%s raw=%s",
         notification.sender,
-        payload,
+        button_id,
         txt,
+        payload,
     )
     if not txt:
         return
@@ -113,35 +107,11 @@ def _handle_button_payload(notification: Notification) -> None:
     admin_buttons = set(ADMIN_MENU_BUTTONS)
     worker_buttons = set(WORKER_MENU_BUTTONS)
     if txt in admin_buttons:
+        logger.debug("admin button matched: %s (%s)", txt, button_id)
         admin_buttons_handler(notification, txt)
     elif txt in worker_buttons:
+        logger.debug("worker button matched: %s (%s)", txt, button_id)
         worker_buttons_handler(notification, txt)
-
-
-@bot.router.message(type_message=TEXT_TYPES)
-def base_menu_handler(notification: Notification) -> None:
-    """Обрабатывает входящие текстовые сообщения (0/1)."""
-    logging.debug(
-        "incoming text message: sender=%s type=%s text=%s",
-        notification.sender,
-        notification.event.get("messageData", {}).get("typeMessage"),
-        notification.get_message_text(),
-    )
-    if notification.sender in settings.admin_phones:
-        _handle_menu_command(notification)
-
-
-@bot.router.outgoing_message(type_message=TEXT_TYPES)
-def outgoing_base_menu_handler(notification: Notification) -> None:
-    """Обрабатывает отправленные вручную текстовые сообщения (0/1) через outgoing hook."""
-    logging.debug(
-        "outgoing text message: sender=%s type=%s text=%s",
-        notification.sender,
-        notification.event.get("messageData", {}).get("typeMessage"),
-        notification.get_message_text(),
-    )
-    if notification.sender in settings.admin_phones:
-        _handle_menu_command(notification)
 
 
 @bot.router.message(
@@ -174,7 +144,7 @@ def outgoing_buttons_handler(notification: Notification) -> None:
 )
 def add_new_manager(notification: Notification) -> None:
     """FSM: шаг добавления менеджера (ввод номера)."""
-    if not _is_authorized_admin(notification.sender):
+    if not is_authorized_admin(notification.sender):
         notification.answer("Недостаточно прав для выполнения команды.")
         return
     admin_add_new_manager(notification)
@@ -186,7 +156,7 @@ def add_new_manager(notification: Notification) -> None:
 )
 def delete_manager(notification: Notification) -> None:
     """FSM: шаг отключения менеджера (ввод номера)."""
-    if not _is_authorized_admin(notification.sender):
+    if not is_authorized_admin(notification.sender):
         notification.answer("Недостаточно прав для выполнения команды.")
         return
     admin_delete_manager(notification)
@@ -198,22 +168,23 @@ def delete_manager(notification: Notification) -> None:
 )
 def manager_report(notification: Notification) -> None:
     """FSM: ввод параметров отчёта."""
-    if not _is_authorized_admin(notification.sender):
+    if not is_authorized_admin(notification.sender):
         notification.answer("Недостаточно прав для выполнения команды.")
         return
     admin_manager_report(notification)
 
 
 @bot.router.message(
-    state=[
-        AdminAdjustBalanceStates.WORKER_PHONE.value,
-        AdminAdjustBalanceStates.DELTA.value,
-    ],
+    state=AdminAdjustBalanceStates.WORKER_PHONE.value,
+    type_message=TEXT_TYPES,
+)
+@bot.router.message(
+    state=AdminAdjustBalanceStates.DELTA.value,
     type_message=TEXT_TYPES,
 )
 def adjust_balance(notification: Notification) -> None:
     """FSM: корректировка баланса (номер → сумма)."""
-    if not _is_authorized_admin(notification.sender):
+    if not is_authorized_admin(notification.sender):
         notification.answer("Недостаточно прав для выполнения команды.")
         return
     admin_adjust_balance(notification)
@@ -241,16 +212,50 @@ def open_shift(notification: Notification) -> None:
 
 
 @bot.router.message(
-    state=[
-        States.DEAL_CLIENT_NAME,
-        States.DEAL_CLIENT_PHONE,
-        States.DEAL_AMOUNT,
-    ],
+    state=States.DEAL_CLIENT_NAME,
+    type_message=TEXT_TYPES,
+)
+@bot.router.message(
+    state=States.DEAL_CLIENT_PHONE,
+    type_message=TEXT_TYPES,
+)
+@bot.router.message(
+    state=States.DEAL_AMOUNT,
     type_message=TEXT_TYPES,
 )
 def deal_handler(notification: Notification) -> None:
     """FSM: шаги создания сделки (имя → телефон → сумма)."""
     deal_steps(notification)
+
+
+@bot.router.message(
+    type_message=TEXT_TYPES,
+    state=None,
+)
+def base_menu_handler(notification: Notification) -> None:
+    """Обрабатывает входящие текстовые сообщения (0/1)."""
+    logger.debug(
+        "incoming text message: sender=%s type=%s text=%s",
+        notification.sender,
+        notification.event.get("messageData", {}).get("typeMessage"),
+        notification.get_message_text(),
+    )
+    handle_menu_command(notification)
+
+
+@bot.router.outgoing_message(
+    type_message=TEXT_TYPES,
+    state=None,
+)
+def outgoing_base_menu_handler(notification: Notification) -> None:
+    """Обрабатывает отправленные вручную текстовые сообщения (0/1) через outgoing hook."""
+    logger.debug(
+        "outgoing text message: sender=%s type=%s text=%s",
+        notification.sender,
+        notification.event.get("messageData", {}).get("typeMessage"),
+        notification.get_message_text(),
+    )
+    handle_menu_command(notification)
 
 
 if __name__ == "__main__":
