@@ -94,16 +94,16 @@ def build_deals_report(
         )
 
         lines = [
-            f"Отчёт {start} — {end}",
-            f"Сделок: {summary.total_count}",
-            f"Выдачи: {_format_money(summary.issued_sum)} ({summary.issued_count})",
-            f"Возвраты: {_format_money(summary.return_sum)} ({summary.return_count})",
-            f"Нетто: {_format_money(summary.net_sum)}",
+            f"📊 Отчёт {start:%d.%m.%Y} — {end:%d.%m.%Y}",
+            f"Всего сделок: {summary.total_count}",
+            f"💸 Выдачи: {_format_money(summary.issued_sum)} (шт. {summary.issued_count})",
+            f"↩️ Возвраты: {_format_money(summary.return_sum)} (шт. {summary.return_count})",
+            f"🧮 Итог: {_format_money(summary.net_sum)}",
         ]
 
         if worker:
             worker_label = worker.name or worker.phone
-            lines.append(f"Сотрудник: {worker_label}")
+            lines.append(f"👤 Сотрудник: {worker_label}")
             return "\n".join(lines)
 
         detail_rows = (
@@ -120,17 +120,17 @@ def build_deals_report(
         )
 
         if detail_rows:
-            lines.append("По сотрудникам:")
+            lines.append("\n👥 По сотрудникам:")
             for row in detail_rows:
                 worker_label = row.name or row.phone or "Не указан"
                 lines.append(
-                    f"- {worker_label}: "
-                    f"выдач {row.issued_count} / {_format_money(row.issued_sum)}, "
-                    f"возвратов {row.return_count} / {_format_money(row.return_sum)}, "
-                    f"нетто {_format_money(row.net_sum)}"
+                    f"• {worker_label}: "
+                    f"выдачи {_format_money(row.issued_sum)} (шт. {row.issued_count}), "
+                    f"возвраты {_format_money(row.return_sum)} (шт. {row.return_count}), "
+                    f"итог {_format_money(row.net_sum)}"
                 )
         else:
-            lines.append("По сотрудникам: нет сделок")
+            lines.append("По сотрудникам: нет сделок за период.")
 
         return "\n".join(lines)
 

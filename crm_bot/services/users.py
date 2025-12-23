@@ -113,3 +113,28 @@ def disable_manager(phone: str, session=None) -> User:
         user.is_active = False
         local.flush()
         return user
+
+
+def ensure_admin(phone: str, session=None) -> User:
+    """Возвращает администратора, создавая запись при необходимости."""
+    normalized = normalize_phone(phone)
+    with db_session(session=session) as local:
+        user = (
+            local.query(User)
+            .filter(User.phone == normalized)
+            .one_or_none()
+        )
+        if user:
+            user.role = UserRole.ADMIN
+            user.is_active = True
+            local.flush()
+            return user
+
+        user = User(
+            phone=normalized,
+            role=UserRole.ADMIN,
+            is_active=True,
+        )
+        local.add(user)
+        local.flush()
+        return user

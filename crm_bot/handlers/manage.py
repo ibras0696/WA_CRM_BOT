@@ -21,8 +21,8 @@ def manage_menu_handler(notification: Notification) -> None:
     logging.debug("sending worker menu to %s", notification.sender)
     base_wa_kb_sender(
         notification.sender,
-        body="Менеджер Панель",
-        header="Меню сделок",
+        body="👷 Меню сотрудника",
+        header="Выберите действие",
         buttons=WORKER_MENU_BUTTONS,
     )
 
@@ -50,7 +50,7 @@ def worker_buttons_handler(notification: Notification, txt: str) -> None:
         case "Мои сделки":
             _send_deals(notification)
         case _:
-            notification.answer("Команда пока не поддерживается.")
+            notification.answer("📌 Команда пока не поддерживается.")
 
 
 def open_shift_step(notification: Notification) -> None:
@@ -67,7 +67,7 @@ def open_shift_step(notification: Notification) -> None:
     finally:
         notification.state_manager.delete_state(notification.sender)
 
-    notification.answer("Смена открыта.")
+    notification.answer("✅ Смена открыта. Можно создавать сделки.")
 
 
 def deal_steps(notification: Notification) -> None:
@@ -81,7 +81,7 @@ def deal_steps(notification: Notification) -> None:
             notification.sender, {"client_name": text}
         )
         switch_state(notification, States.DEAL_CLIENT_PHONE)
-        notification.answer("Телефон клиента (опционально):")
+        notification.answer("📞 Телефон клиента (опционально):")
         return
 
     data = notification.state_manager.get_state_data(notification.sender) or {}
@@ -89,7 +89,7 @@ def deal_steps(notification: Notification) -> None:
         data["client_phone"] = text
         notification.state_manager.update_state_data(notification.sender, data)
         switch_state(notification, States.DEAL_AMOUNT)
-        notification.answer("Сумма операции (можно с + или -):")
+        notification.answer("💰 Сумма операции (можно с + или -):")
         return
 
     if state_name == States.DEAL_AMOUNT:
@@ -113,7 +113,8 @@ def deal_steps(notification: Notification) -> None:
             notification.state_manager.delete_state(notification.sender)
 
         notification.answer(
-            f"Сделка #{deal.id} создана. Клиент: {deal.client_name}. "
+            f"✅ Сделка #{deal.id} сохранена.\n"
+            f"Клиент: {deal.client_name}\n"
             f"Сумма: {deal.total_amount}"
         )
 
@@ -124,7 +125,7 @@ def _send_balance(notification: Notification) -> None:
         if not user:
             raise Exception("Нет доступа. Обратитесь к админу.")
         balance = deal_service.get_active_balance(user)
-        notification.answer(f"Текущий лимит: {balance}")
+        notification.answer(f"💼 Текущий лимит: {balance}")
     except Exception as exc:  # noqa: BLE001
         notification.answer(str(exc))
 
@@ -142,6 +143,6 @@ def _send_deals(notification: Notification) -> None:
             f"#{d.id} {d.client_name} — {d.total_amount} ({d.created_at.date()})"
             for d in deals
         ]
-        notification.answer("Последние сделки:\n" + "\n".join(lines))
+        notification.answer("🧾 Последние сделки:\n" + "\n".join(lines))
     except Exception as exc:  # noqa: BLE001
         notification.answer(str(exc))

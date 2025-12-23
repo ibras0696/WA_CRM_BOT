@@ -29,6 +29,8 @@ ADMIN_MENU_BUTTONS = [
     "Отчёт",
 ]
 TODAY_DEALS_PREVIEW_LIMIT = 5
+CANCEL_KEYWORDS = {"отмена", "cancel", "выход", "stop"}
+CANCEL_MESSAGE = "❌ Запрос отменён."
 
 
 def admin_menu_handler(notification: Notification) -> None:
@@ -36,8 +38,8 @@ def admin_menu_handler(notification: Notification) -> None:
     logging.debug("sending admin menu to %s", notification.sender)
     base_wa_kb_sender(
         notification.sender,
-        body="Админ Панель",
-        header="Меню управления",
+        body="👑 Админ-панель",
+        header="Выберите действие",
         buttons=ADMIN_MENU_BUTTONS,
     )
 
@@ -47,19 +49,19 @@ def admin_buttons_handler(notification: Notification, txt: str) -> None:
     logging.debug("admin button handler triggered: sender=%s text=%s", notification.sender, txt)
     match txt:
         case "Добавить сотрудника":
-            notification.answer("Введите номер сотрудника в формате 7XXXXXXXXXX.")
+            notification.answer("➕ Введите номер сотрудника в формате 7XXXXXXXXXX.")
             notification.state_manager.set_state(
                 notification.sender,
                 AdminAddManagerStates.SENDER.value,
             )
         case "Отключить сотрудника":
-            notification.answer("Введите номер сотрудника для отключения.")
+            notification.answer("🚫 Введите номер сотрудника для отключения.")
             notification.state_manager.set_state(
                 notification.sender,
                 AdminDeleteManagerStates.SENDER.value,
             )
         case "Корректировка баланса":
-            notification.answer("Введите номер сотрудника для корректировки.")
+            notification.answer("⚖️ Введите номер сотрудника для корректировки.")
             notification.state_manager.set_state(
                 notification.sender,
                 AdminAdjustBalanceStates.WORKER_PHONE.value,
@@ -72,7 +74,7 @@ def admin_buttons_handler(notification: Notification, txt: str) -> None:
             )
         case "Отчёт":
             notification.answer(
-                "Введите даты отчёта: начало и (опционально) конец + номер сотрудника.\n"
+                "📅 Введите даты отчёта: начало и (опционально) конец + номер сотрудника.\n"
                 "Формат: YYYY-MM-DD [YYYY-MM-DD] [номер]\n"
                 "Пример: 2025-01-01 2025-01-31 79991234567"
             )
@@ -100,7 +102,7 @@ def admin_add_new_manager(notification: Notification) -> None:
         notification.state_manager.delete_state(notification.sender)
 
     notification.answer(
-        f"Менеджер {user.phone} активирован."
+        f"✅ Менеджер {user.phone} активирован."
         + (f" Имя: {user.name}." if user.name else "")
     )
 
@@ -120,7 +122,7 @@ def admin_delete_manager(notification: Notification) -> None:
     finally:
         notification.state_manager.delete_state(notification.sender)
 
-    notification.answer(f"Доступ для {user.phone} отключён.")
+    notification.answer(f"⚠️ Доступ для {user.phone} отключён.")
 
 
 def admin_adjust_balance(notification: Notification) -> None:
@@ -140,9 +142,7 @@ def admin_adjust_balance(notification: Notification) -> None:
     data = notification.state_manager.get_state_data(notification.sender) or {}
     worker_phone = data.get("worker_phone")
     try:
-        admin = user_service.get_active_user_by_phone(notification.sender)
-        if not admin:
-            raise Exception("Админ не найден.")
+        admin = user_service.ensure_admin(notification.sender)
         admin_service.adjust_worker_balance(admin, worker_phone, raw)
     except Exception as exc:  # noqa: BLE001
         notification.answer(str(exc))
@@ -150,7 +150,7 @@ def admin_adjust_balance(notification: Notification) -> None:
     finally:
         notification.state_manager.delete_state(notification.sender)
 
-    notification.answer("Баланс скорректирован.")
+    notification.answer("✅ Баланс скорректирован.")
 
 
 def admin_delete_deal(notification: Notification) -> None:
@@ -163,9 +163,7 @@ def admin_delete_deal(notification: Notification) -> None:
         return
 
     try:
-        admin = user_service.get_active_user_by_phone(notification.sender)
-        if not admin:
-            raise Exception("Админ не найден.")
+        admin = user_service.ensure_admin(notification.sender)
         admin_service.soft_delete_deal(admin, deal_id)
     except Exception as exc:  # noqa: BLE001
         notification.answer(str(exc))
@@ -173,7 +171,7 @@ def admin_delete_deal(notification: Notification) -> None:
     finally:
         notification.state_manager.delete_state(notification.sender)
 
-    notification.answer(f"Сделка #{deal_id} помечена как удалённая.")
+    notification.answer(f"🗑️ Сделка #{deal_id} помечена как удалённая.")
 
 
 def admin_manager_report(notification: Notification) -> None:
@@ -181,6 +179,11 @@ def admin_manager_report(notification: Notification) -> None:
     text = notification.get_message_text().strip()
     if not text:
         notification.answer("Укажите даты.")
+        return
+
+    if text.lower() in CANCEL_KEYWORDS:
+        notification.state_manager.delete_state(notification.sender)
+        notification.answer(CANCEL_MESSAGE)
         return
 
     parts = text.split()
@@ -213,7 +216,7 @@ def _parse_date(raw: str) -> date:
 def _prepare_delete_deals_prompt() -> str:
     preview = _format_today_deals()
     return (
-        "Введите ID сделки для удаления (число).\n"
+        "🗑️ Введите ID сделки для удаления (число).\n"
         f"{preview}"
     )
 
