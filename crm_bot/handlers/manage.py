@@ -7,7 +7,8 @@ from crm_bot.services import deals as deal_service
 from crm_bot.services import shifts as shift_service
 from crm_bot.services import users as user_service
 from crm_bot.states.states import States
-from crm_bot.utils.fsm import get_state_name, switch_state
+from crm_bot.utils.fsm import get_state_name
+from crm_bot.handlers.utils import handle_menu_shortcut
 
 WORKER_MENU_BUTTONS = [
     "Открыть смену",
@@ -42,9 +43,9 @@ def worker_buttons_handler(notification: Notification, txt: str) -> None:
             notification.answer("Укажите стартовую сумму смены.")
         case "Новая сделка":
             notification.state_manager.set_state(
-                notification.sender, States.DEAL_CLIENT_NAME
+                notification.sender, States.DEAL_AMOUNT
             )
-            notification.answer("Имя клиента?")
+            notification.answer("💰 Введите сумму операции (можно с + или -).")
         case "Мой баланс":
             _send_balance(notification)
         case "Мои сделки":
@@ -56,6 +57,9 @@ def worker_buttons_handler(notification: Notification, txt: str) -> None:
 def open_shift_step(notification: Notification) -> None:
     """FSM шаг: ввод суммы для открытия смены."""
     amount = notification.get_message_text().strip()
+    if handle_menu_shortcut(notification, amount):
+        notification.state_manager.delete_state(notification.sender)
+        return
     try:
         user = user_service.get_active_user_by_phone(notification.sender)
         if not user:
@@ -74,36 +78,20 @@ def deal_steps(notification: Notification) -> None:
     """FSM шаги создания сделки."""
     state = notification.state_manager.get_state(notification.sender)
     state_name = get_state_name(state)
-    text = notification.get_message_text().strip()
-
-    if state_name == States.DEAL_CLIENT_NAME:
-        notification.state_manager.update_state_data(
-            notification.sender, {"client_name": text}
-        )
-        switch_state(notification, States.DEAL_CLIENT_PHONE)
-        notification.answer("📞 Телефон клиента (опционально):")
-        return
-
-    data = notification.state_manager.get_state_data(notification.sender) or {}
-    if state_name == States.DEAL_CLIENT_PHONE:
-        data["client_phone"] = text
-        notification.state_manager.update_state_data(notification.sender, data)
-        switch_state(notification, States.DEAL_AMOUNT)
-        notification.answer("💰 Сумма операции (можно с + или -):")
+    amount = notification.get_message_text().strip()
+    if handle_menu_shortcut(notification, amount):
+        notification.state_manager.delete_state(notification.sender)
         return
 
     if state_name == States.DEAL_AMOUNT:
-        client_name = data.get("client_name")
-        client_phone = data.get("client_phone")
-        amount = text
         try:
             user = user_service.get_active_user_by_phone(notification.sender)
             if not user:
                 raise Exception("Нет доступа. Обратитесь к админу.")
             deal = deal_service.create_deal(
                 worker=user,
-                client_name=client_name,
-                client_phone=client_phone,
+                client_name=None,
+                client_phone=None,
                 total_amount=amount,
             )
         except Exception as exc:  # noqa: BLE001
@@ -113,9 +101,7 @@ def deal_steps(notification: Notification) -> None:
             notification.state_manager.delete_state(notification.sender)
 
         notification.answer(
-            f"✅ Сделка #{deal.id} сохранена.\n"
-            f"Клиент: {deal.client_name}\n"
-            f"Сумма: {deal.total_amount}"
+            f"✅ Сделка #{deal.id} сохранена. Сумма: {deal.total_amount}"
         )
 
 

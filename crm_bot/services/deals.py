@@ -64,8 +64,7 @@ def create_deal(
     amount = _as_decimal(total_amount)
     if amount == 0:
         raise ValidationError("Сумма сделки должна быть отлична от 0.")
-    if not client_name:
-        raise ValidationError("Имя клиента обязательно.")
+    normalized_client_name = (client_name or "Без имени").strip() or "Без имени"
 
     with db_session(session=session) as local:
         shift: Shift | None = (
@@ -84,7 +83,7 @@ def create_deal(
         deal = Deal(
             worker_id=worker.id,
             shift_id=shift.id,
-            client_name=client_name.strip(),
+            client_name=normalized_client_name,
             client_phone=(client_phone or "").strip() or None,
             total_amount=amount,
         )

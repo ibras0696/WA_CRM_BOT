@@ -54,6 +54,7 @@ def _clear_state(notification: Notification) -> None:
         return
     try:
         deleter(notification.sender)
+        logging.debug("state cleared for %s", notification.sender)
     except Exception as exc:  # noqa: BLE001
         logging.warning("failed to clear state for %s: %s", notification.sender, exc)
 

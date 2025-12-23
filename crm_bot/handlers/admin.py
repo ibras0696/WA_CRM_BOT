@@ -19,6 +19,7 @@ from crm_bot.states.admin import (
     AdminDeleteDealStates,
     AdminDeleteManagerStates,
 )
+from crm_bot.handlers.utils import handle_menu_shortcut
 from crm_bot.utils.fsm import get_state_name, switch_state
 
 ADMIN_MENU_BUTTONS = [
@@ -89,6 +90,9 @@ def admin_buttons_handler(notification: Notification, txt: str) -> None:
 def admin_add_new_manager(notification: Notification) -> None:
     """FSM: добавление нового менеджера."""
     text = (notification.get_message_text() or "").strip()
+    if handle_menu_shortcut(notification, text):
+        notification.state_manager.delete_state(notification.sender)
+        return
     if not text:
         notification.answer("Номер не должен быть пустым.")
         return
@@ -110,6 +114,9 @@ def admin_add_new_manager(notification: Notification) -> None:
 def admin_delete_manager(notification: Notification) -> None:
     """FSM: деактивация менеджера."""
     text = (notification.get_message_text() or "").strip()
+    if handle_menu_shortcut(notification, text):
+        notification.state_manager.delete_state(notification.sender)
+        return
     if not text:
         notification.answer("Номер не должен быть пустым.")
         return
@@ -130,6 +137,9 @@ def admin_adjust_balance(notification: Notification) -> None:
     state = notification.state_manager.get_state(notification.sender)
     state_name = get_state_name(state)
     raw = notification.get_message_text().strip()
+    if handle_menu_shortcut(notification, raw):
+        notification.state_manager.delete_state(notification.sender)
+        return
     if state_name == AdminAdjustBalanceStates.WORKER_PHONE.value:
         notification.state_manager.update_state_data(
             notification.sender,
@@ -156,6 +166,9 @@ def admin_adjust_balance(notification: Notification) -> None:
 def admin_delete_deal(notification: Notification) -> None:
     """FSM: soft-delete сделки."""
     raw = notification.get_message_text().strip()
+    if handle_menu_shortcut(notification, raw):
+        notification.state_manager.delete_state(notification.sender)
+        return
     try:
         deal_id = int(raw)
     except ValueError:
@@ -177,13 +190,22 @@ def admin_delete_deal(notification: Notification) -> None:
 def admin_manager_report(notification: Notification) -> None:
     """FSM: отчёт по периоду и (опционально) сотруднику."""
     text = notification.get_message_text().strip()
+    if handle_menu_shortcut(notification, text):
+        notification.state_manager.delete_state(notification.sender)
+        return
     if not text:
         notification.answer("Укажите даты.")
         return
 
-    if text.lower() in CANCEL_KEYWORDS:
+    normalized = text.lower()
+    if normalized in CANCEL_KEYWORDS or text in {"0", "1"}:
         notification.state_manager.delete_state(notification.sender)
-        notification.answer(CANCEL_MESSAGE)
+        if text in {"0", "1"}:
+            from crm_bot.handlers.menu import handle_menu_command
+
+            handle_menu_command(notification, txt=text)
+        else:
+            notification.answer(CANCEL_MESSAGE)
         return
 
     parts = text.split()
