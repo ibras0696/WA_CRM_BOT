@@ -19,6 +19,7 @@ from crm_bot.handlers.admin import (
 from crm_bot.handlers.manage import (
     worker_buttons_handler,
     open_shift_step,
+    close_shift_step,
     deal_steps,
     installment_steps,
     deal_details_step,
@@ -238,6 +239,19 @@ def full_report_custom(notification: Notification) -> None:
 def open_shift(notification: Notification) -> None:
     """FSM: ввод сумм при открытии смены (worker)."""
     open_shift_step(notification)
+
+
+@bot.router.message(
+    state=States.CLOSE_SHIFT_CASH.value,
+    type_message=TEXT_TYPES,
+)
+@bot.router.message(
+    state=States.CLOSE_SHIFT_BANK.value,
+    type_message=TEXT_TYPES,
+)
+def close_shift(notification: Notification) -> None:
+    """FSM: ввод фактических остатков при закрытии смены (worker)."""
+    close_shift_step(notification)
 
 
 @bot.router.message(

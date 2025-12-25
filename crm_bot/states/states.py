@@ -8,6 +8,8 @@ class States(BaseStates):
 
     OPEN_SHIFT_CASH = "shift:opening_cash"
     OPEN_SHIFT_BANK = "shift:opening_bank"
+    CLOSE_SHIFT_CASH = "shift:closing_cash"
+    CLOSE_SHIFT_BANK = "shift:closing_bank"
     DEAL_AMOUNT = "deal:amount"
     DEAL_PAYMENT_METHOD = "deal:payment_method"
     DEAL_DETAILS = "deal:details"

@@ -102,6 +102,11 @@ class Shift(Base):
     current_balance_bank = Column(Numeric(12, 2), nullable=False, server_default="0")
     opening_balance = Column(Numeric(12, 2), nullable=False)
     current_balance = Column(Numeric(12, 2), nullable=False)
+    reported_cash = Column(Numeric(12, 2))
+    reported_bank = Column(Numeric(12, 2))
+    reported_at = Column(DateTime(timezone=True))
+    cash_diff = Column(Numeric(12, 2))
+    bank_diff = Column(Numeric(12, 2))
     status = Column(
         Enum(
             ShiftStatus,

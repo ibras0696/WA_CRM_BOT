@@ -193,7 +193,13 @@ def get_last_closed_shift(worker_id: int, session=None) -> Shift | None:
         )
 
 
-def close_shift(worker: User, session=None) -> Shift:
+def close_shift(
+    worker: User,
+    *,
+    reported_cash: float | int | str | Decimal | None = None,
+    reported_bank: float | int | str | Decimal | None = None,
+    session=None,
+) -> Shift:
     """Закрывает активную смену конкретного сотрудника."""
     shift = get_active_shift(worker.id, session=session)
     if not shift:
@@ -203,4 +209,14 @@ def close_shift(worker: User, session=None) -> Shift:
         current_shift = local.get(Shift, shift.id)
         current_shift.status = ShiftStatus.CLOSED
         current_shift.closed_at = current_time
+        if reported_cash is not None or reported_bank is not None:
+            expected_cash = Decimal(current_shift.current_balance_cash or 0)
+            expected_bank = Decimal(current_shift.current_balance_bank or 0)
+            cash_value = _as_decimal(reported_cash if reported_cash is not None else expected_cash)
+            bank_value = _as_decimal(reported_bank if reported_bank is not None else expected_bank)
+            current_shift.reported_cash = cash_value
+            current_shift.reported_bank = bank_value
+            current_shift.cash_diff = expected_cash - cash_value
+            current_shift.bank_diff = expected_bank - bank_value
+            current_shift.reported_at = current_time
         return current_shift

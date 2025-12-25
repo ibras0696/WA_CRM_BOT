@@ -30,3 +30,13 @@ def test_adjust_balance(session, worker_user):
 def test_adjust_balance_no_shift(session, worker_user):
     with pytest.raises(shifts.NoActiveShift):
         shifts.adjust_balance(worker_user, 10, session=session)
+
+
+def test_close_shift_with_report(session, worker_user):
+    shifts.open_shift(worker_user, 120, 80, session=session)
+    closed = shifts.close_shift(worker_user, reported_cash=100, reported_bank=90, session=session)
+    assert closed.status == shifts.ShiftStatus.CLOSED
+    assert closed.reported_cash == Decimal("100")
+    assert closed.reported_bank == Decimal("90")
+    assert closed.cash_diff == Decimal("20")
+    assert closed.bank_diff == Decimal("-10")

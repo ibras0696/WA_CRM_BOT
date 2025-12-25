@@ -6,10 +6,10 @@ from datetime import datetime, date, timezone
 from zoneinfo import ZoneInfo
 from decimal import Decimal
 
-from sqlalchemy import func, case
+from sqlalchemy import func, case, or_
 
 from crm_bot.core.db import db_session
-from crm_bot.core.models import Deal, User, UserRole, DealPaymentMethod, DealType
+from crm_bot.core.models import Deal, User, UserRole, DealPaymentMethod, DealType, Shift
 from crm_bot.services import users as user_service
 from crm_bot.services import shifts as shift_service
 from crm_bot.services import deals as deal_service
@@ -84,6 +84,8 @@ def build_deals_report(
     with db_session(session=session) as local:
         normalized_start = adapt_datetime_for_db(start_utc, local.bind)
         normalized_end = adapt_datetime_for_db(end_utc, local.bind)
+        local_start = adapt_datetime_for_db(start_dt, local.bind)
+        local_end = adapt_datetime_for_db(end_dt, local.bind)
 
         base_filters = [
             Deal.is_deleted.is_(False),
@@ -148,11 +150,55 @@ def build_deals_report(
         else:
             lines.append("По сотрудникам: нет операций за период.")
 
+        mismatch_rows = (
+            local.query(
+                Shift.closed_at,
+                Shift.reported_cash,
+                Shift.reported_bank,
+                Shift.cash_diff,
+                Shift.bank_diff,
+                User.name,
+                User.phone,
+            )
+            .outerjoin(User, User.id == Shift.worker_id)
+            .filter(
+                Shift.closed_at >= local_start,
+                Shift.closed_at <= local_end,
+                Shift.reported_at.isnot(None),
+                or_(
+                    func.coalesce(Shift.cash_diff, 0) != 0,
+                    func.coalesce(Shift.bank_diff, 0) != 0,
+                ),
+            )
+            .order_by(Shift.closed_at.desc())
+            .all()
+        )
+        if mismatch_rows:
+            lines.append("\n🧾 Сверка смен (расхождения):")
+            for row in mismatch_rows:
+                worker_label = row.name or row.phone or "Не указан"
+                expected_cash = _as_decimal(row.reported_cash) + _as_decimal(row.cash_diff)
+                expected_bank = _as_decimal(row.reported_bank) + _as_decimal(row.bank_diff)
+                lines.append(
+                    f"• {worker_label} ({row.closed_at:%d.%m}): "
+                    f"нал ожид. {_format_money(expected_cash)} → факт {_format_money(row.reported_cash)} "
+                    f"(разн. {_format_money(row.cash_diff)}); "
+                    f"банк {_format_money(expected_bank)} → {_format_money(row.reported_bank)} "
+                    f"(разн. {_format_money(row.bank_diff)})"
+                )
+
         return "\n".join(lines)
 
 
 def _format_money(value: Decimal | int | float) -> str:
     return format_amount(value)
+
+
+def _as_decimal(value) -> Decimal:
+    """Безопасно переводит число к Decimal, обрабатывая None."""
+    if value is None:
+        return Decimal(0)
+    return Decimal(value)
 
 
 def _aggregate_columns() -> tuple:
@@ -248,6 +294,8 @@ def build_full_report(
     with db_session(session=session) as local:
         start_utc = adapt_datetime_for_db(start_dt.astimezone(ZoneInfo("UTC")), local.bind)
         end_utc = adapt_datetime_for_db(end_dt.astimezone(ZoneInfo("UTC")), local.bind)
+        local_start = adapt_datetime_for_db(start_dt, local.bind)
+        local_end = adapt_datetime_for_db(end_dt, local.bind)
         base_filters = [
             Deal.is_deleted.is_(False),
             Deal.created_at >= start_utc,
@@ -262,10 +310,7 @@ def build_full_report(
         installment_stats = _aggregate_for_type(local, base_filters, DealType.INSTALLMENT)
         operation_stats = _aggregate_for_type(local, base_filters, DealType.OPERATION)
 
-        def as_decimal(value):
-            return Decimal(value or 0)
-
-        turnover = as_decimal(summary.issued_sum) + as_decimal(summary.return_sum)
+        turnover = _as_decimal(summary.issued_sum) + _as_decimal(summary.return_sum)
         lines = [
             f"📘 Полный отчёт {start:%d.%m.%Y} — {end:%d.%m.%Y}",
             f"Оборот: {_format_money(turnover)}",
@@ -308,7 +353,7 @@ def build_full_report(
             lines.append("\n👥 По сотрудникам:")
             for row in detail_rows:
                 worker_label = row.name or row.phone or "Не указан"
-                worker_turnover = as_decimal(row.issued_sum) + as_decimal(row.return_sum)
+                worker_turnover = _as_decimal(row.issued_sum) + _as_decimal(row.return_sum)
                 kind = "Рассрочки" if row.deal_type == DealType.INSTALLMENT.value else "Фин. операции"
                 lines.append(
                     f"• {worker_label} ({kind}): "
@@ -319,5 +364,42 @@ def build_full_report(
                 )
         else:
             lines.append("\nПо сотрудникам нет операций за период.")
+
+        mismatch_rows = (
+            local.query(
+                Shift.closed_at,
+                Shift.reported_cash,
+                Shift.reported_bank,
+                Shift.cash_diff,
+                Shift.bank_diff,
+                User.name,
+                User.phone,
+            )
+            .outerjoin(User, User.id == Shift.worker_id)
+            .filter(
+                Shift.closed_at >= local_start,
+                Shift.closed_at <= local_end,
+                Shift.reported_at.isnot(None),
+                or_(
+                    func.coalesce(Shift.cash_diff, 0) != 0,
+                    func.coalesce(Shift.bank_diff, 0) != 0,
+                ),
+            )
+            .order_by(Shift.closed_at.desc())
+            .all()
+        )
+        if mismatch_rows:
+            lines.append("\n🧾 Сверка смен (расхождения):")
+            for row in mismatch_rows:
+                worker_label = row.name or row.phone or "Не указан"
+                expected_cash = _as_decimal(row.reported_cash) + _as_decimal(row.cash_diff)
+                expected_bank = _as_decimal(row.reported_bank) + _as_decimal(row.bank_diff)
+                lines.append(
+                    f"• {worker_label} ({row.closed_at:%d.%m}): "
+                    f"нал ожид. {_format_money(expected_cash)} → факт {_format_money(row.reported_cash)} "
+                    f"(разн. {_format_money(row.cash_diff)}); "
+                    f"банк {_format_money(expected_bank)} → {_format_money(row.reported_bank)} "
+                    f"(разн. {_format_money(row.bank_diff)})"
+                )
 
         return "\n".join(lines)

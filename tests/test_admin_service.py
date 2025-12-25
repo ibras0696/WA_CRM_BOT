@@ -1,5 +1,7 @@
 """Тесты административных сервисов."""
 
+from datetime import datetime
+
 import pytest
 
 from crm_bot.services import admin as admin_service, shifts
@@ -24,3 +26,13 @@ def test_soft_delete_deal(session, admin_user, worker_user):
     deal = admin_service.deal_service.create_deal(worker_user, "Кл", None, 50, session=session)  # type: ignore[attr-defined]
     admin_service.soft_delete_deal(admin_user, deal.id, session=session)
     assert deal.is_deleted is True
+
+
+def test_full_report_mentions_shift_mismatch(session, admin_user, worker_user):
+    shifts.open_shift(worker_user, 200, 100, session=session)
+    shifts.close_shift(worker_user, reported_cash=150, reported_bank=110, session=session)
+    session.commit()
+
+    today = datetime.now(admin_service.MOSCOW_TZ).date()
+    report = admin_service.build_full_report(today, today, session=session)
+    assert "Сверка смен" in report

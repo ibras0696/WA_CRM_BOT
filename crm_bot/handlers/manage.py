@@ -61,6 +61,33 @@ def _start_installment_flow(notification: Notification) -> None:
     notification.answer(_with_worker_hint(INSTALLMENT_START_PROMPT))
 
 
+def _start_close_shift(notification: Notification, worker) -> None:
+    active = shift_service.get_active_shift(worker.id)
+    if not active:
+        notification.answer("Нет активной смены. Сначала откройте смену.")
+        return
+    expected_cash = Decimal(active.current_balance_cash or 0)
+    expected_bank = Decimal(active.current_balance_bank or 0)
+    notification.state_manager.set_state(
+        notification.sender,
+        States.CLOSE_SHIFT_CASH.value,
+    )
+    notification.state_manager.update_state_data(
+        notification.sender,
+        {
+            "expected_cash": str(expected_cash),
+            "expected_bank": str(expected_bank),
+        },
+    )
+    notification.answer(
+        _with_worker_hint(
+            "Сверка смены.\n"
+            f"В системе по наличке: {format_amount(expected_cash)}.\n"
+            "Введите фактический остаток наличных."
+        )
+    )
+
+
 def manage_menu_handler(notification: Notification) -> None:
     logging.debug("sending worker menu to %s", notification.sender)
     base_wa_kb_sender(
@@ -82,7 +109,7 @@ def worker_buttons_handler(notification: Notification, txt: str) -> None:
         case "Открыть смену":
             _start_open_shift(notification, worker)
         case "Закрыть смену":
-            _close_shift(notification, worker)
+            _start_close_shift(notification, worker)
         case "Финансовая операция":
             _start_deal_flow(notification)
         case "Выдача рассрочки":
@@ -96,6 +123,9 @@ def worker_buttons_handler(notification: Notification, txt: str) -> None:
 
 
 def _start_open_shift(notification: Notification, worker) -> None:
+    if shift_service.get_active_shift(worker.id):
+        notification.answer("Смена уже открыта. Сначала закройте текущую смену.")
+        return
     notification.state_manager.set_state(
         notification.sender,
         States.OPEN_SHIFT_CASH.value,
@@ -120,15 +150,6 @@ def _start_open_shift(notification: Notification, worker) -> None:
             "Можно отправить `+`, чтобы принять остаток."
         )
     )
-
-
-def _close_shift(notification: Notification, worker) -> None:
-    try:
-        shift_service.close_shift(worker)
-    except shift_service.NoActiveShift as exc:
-        notification.answer(str(exc))
-        return
-    notification.answer("🔒 Смена закрыта.")
 
 
 def open_shift_step(notification: Notification) -> None:
@@ -186,6 +207,75 @@ def open_shift_step(notification: Notification) -> None:
             notification.state_manager.delete_state(notification.sender)
 
         notification.answer("✅ Смена открыта. Можно создавать операции.")
+
+
+def close_shift_step(notification: Notification) -> None:
+    """FSM шаги сверки и закрытия смены."""
+    raw = notification.get_message_text().strip()
+    if handle_back_command(notification, raw):
+        return
+    if handle_menu_shortcut(notification, raw):
+        notification.state_manager.delete_state(notification.sender)
+        return
+
+    state = get_state_name(notification.state_manager.get_state(notification.sender))
+    data = notification.state_manager.get_state_data(notification.sender) or {}
+    if state == States.CLOSE_SHIFT_CASH.value:
+        try:
+            amount = _parse_non_negative_decimal(raw)
+        except ValueError as exc:
+            notification.answer(str(exc))
+            return
+        notification.state_manager.update_state_data(
+            notification.sender,
+            {"reported_cash": str(amount)},
+        )
+        switch_state(notification, States.CLOSE_SHIFT_BANK.value)
+        notification.answer(
+            _with_worker_hint(
+                f"В системе по безналу: {format_amount(Decimal(data.get('expected_bank') or '0'))}.\n"
+                "Введите фактический остаток по банку."
+            )
+        )
+        return
+
+    if state == States.CLOSE_SHIFT_BANK.value:
+        try:
+            reported_bank = _parse_non_negative_decimal(raw)
+        except ValueError as exc:
+            notification.answer(str(exc))
+            return
+        reported_cash = Decimal(data.get("reported_cash") or "0")
+        expected_cash = Decimal(data.get("expected_cash") or "0")
+        expected_bank = Decimal(data.get("expected_bank") or "0")
+        try:
+            worker = user_service.get_active_user_by_phone(notification.sender)
+            if not worker:
+                raise Exception("Нет доступа. Обратитесь к админу.")
+            closed_shift = shift_service.close_shift(
+                worker,
+                reported_cash=reported_cash,
+                reported_bank=reported_bank,
+            )
+        except Exception as exc:  # noqa: BLE001
+            notification.answer(str(exc))
+            return
+        finally:
+            notification.state_manager.delete_state(notification.sender)
+
+        diff_cash = Decimal(closed_shift.cash_diff or 0)
+        diff_bank = Decimal(closed_shift.bank_diff or 0)
+        parts = [
+            "🔒 Смена закрыта.",
+            f"Наличка — система {format_amount(expected_cash)}, факт {format_amount(reported_cash)}, разница {format_amount(diff_cash)}.",
+            f"Банк — система {format_amount(expected_bank)}, факт {format_amount(reported_bank)}, разница {format_amount(diff_bank)}.",
+        ]
+        if diff_cash != 0 or diff_bank != 0:
+            parts.append("⚠️ Есть расхождение, администратор увидит его в отчёте.")
+        notification.answer("\n".join(parts))
+        return
+
+    notification.answer("Неожиданное состояние, начните заново.")
 
 
 def deal_steps(notification: Notification) -> None:
@@ -535,4 +625,14 @@ def _parse_positive_int(raw: str) -> int:
         raise ValueError("Число должно быть целым.")
     if value <= 0:
         raise ValueError("Число должно быть больше 0.")
+    return value
+
+
+def _parse_non_negative_decimal(raw: str) -> Decimal:
+    try:
+        value = Decimal(raw.replace(",", "."))
+    except Exception:
+        raise ValueError("Сумма должна быть числом.") from None
+    if value < 0:
+        raise ValueError("Сумма не может быть отрицательной.")
     return value

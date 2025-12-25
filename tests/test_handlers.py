@@ -148,6 +148,33 @@ def test_worker_deal_pipeline(session, worker_user):
 
 
 @pytest.mark.usefixtures("keyboard_spy")
+def test_worker_close_shift_with_reconciliation(session, worker_user):
+    """Сотрудник: сверка и закрытие смены."""
+    shift = shift_service.open_shift(worker_user, 200, 100, session=session)
+
+    state_manager = DummyStateManager()
+    notification = FakeNotification(sender=worker_user.phone, state_manager=state_manager)
+
+    manage_handlers.worker_buttons_handler(notification, "Закрыть смену")
+    assert state_manager.get_state(worker_user.phone) == States.CLOSE_SHIFT_CASH.value
+
+    notification.set_message_text("150")
+    manage_handlers.close_shift_step(notification)
+    assert state_manager.get_state(worker_user.phone) == States.CLOSE_SHIFT_BANK.value
+
+    notification.set_message_text("80")
+    manage_handlers.close_shift_step(notification)
+
+    session.expire_all()
+    refreshed = session.get(Shift, shift.id)
+    assert refreshed.status == ShiftStatus.CLOSED
+    assert refreshed.reported_cash == Decimal("150")
+    assert refreshed.reported_bank == Decimal("80")
+    assert refreshed.cash_diff == Decimal("50")
+    assert refreshed.bank_diff == Decimal("20")
+
+
+@pytest.mark.usefixtures("keyboard_spy")
 def test_worker_balance_and_deals_menu(session, worker_user):
     """Сотрудник: просмотр баланса и последних операций из меню."""
     shift_service.open_shift(worker_user, 400, 0, session=session)
