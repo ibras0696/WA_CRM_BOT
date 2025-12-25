@@ -1,6 +1,6 @@
 import logging
 import re
-from decimal import Decimal
+from decimal import Decimal, ROUND_HALF_UP
 
 from whatsapp_chatbot_python import Notification
 
@@ -13,6 +13,7 @@ from crm_bot.states.states import States
 from crm_bot.utils.fsm import get_state_name, switch_state
 from crm_bot.handlers.utils import handle_menu_shortcut, handle_back_command
 from crm_bot.core.models import DealPaymentMethod, DealType
+from crm_bot.utils.formatting import format_amount
 
 WORKER_MENU_BUTTONS = [
     "Открыть смену",
@@ -22,6 +23,12 @@ WORKER_MENU_BUTTONS = [
     "Мой баланс",
     "Мои операции",
 ]
+
+WORKER_MENU_HINT = "ℹ️ Чтобы вернуться в меню сотрудника, отправьте `1`."
+
+
+def _with_worker_hint(text: str) -> str:
+    return f"{text}\n\n{WORKER_MENU_HINT}"
 
 PAYMENT_CHOICES = {
     "наличка": DealPaymentMethod.CASH,
@@ -61,15 +68,17 @@ def worker_buttons_handler(notification: Notification, txt: str) -> None:
                 States.DEAL_AMOUNT.value,
             )
             notification.answer(
-                "💰 Введите сумму: `+` — пополнение, `-` — списание. Добавьте комментарий в той же строке.\n"
-                "Пример: `+120000 Предоплата` или `-5000 Закуп`."
+                _with_worker_hint(
+                    "💰 Введите сумму: `+` — пополнение, `-` — списание. Добавьте комментарий в той же строке.\n"
+                    "Пример: `+120000 Предоплата` или `-5000 Закуп`."
+                )
             )
         case "Выдача рассрочки":
             notification.state_manager.set_state(
                 notification.sender,
                 States.INSTALLMENT_PRICE.value,
             )
-            notification.answer("Введите цену товара (руб).")
+            notification.answer(_with_worker_hint("Введите цену товара (руб)."))
         case "Мой баланс":
             _send_balance(notification)
         case "Мои операции":
@@ -97,9 +106,11 @@ def _start_open_shift(notification: Notification, worker) -> None:
         )
     cash_hint = f"Вчерашний остаток: {suggested_cash}" if suggested_cash else "Если остатка нет, введите 0."
     notification.answer(
-        "Укажите стартовый лимит по наличке.\n"
-        f"{cash_hint}\n"
-        "Можно отправить `+`, чтобы принять остаток."
+        _with_worker_hint(
+            "Укажите стартовый лимит по наличке.\n"
+            f"{cash_hint}\n"
+            "Можно отправить `+`, чтобы принять остаток."
+        )
     )
 
 
@@ -140,9 +151,11 @@ def open_shift_step(notification: Notification) -> None:
             else "Если остатка нет, введите 0."
         )
         notification.answer(
-            "Теперь укажите стартовый лимит по безналу.\n"
-            f"{bank_hint}\n"
-            "Можно отправить `+`, чтобы принять остаток."
+            _with_worker_hint(
+                "Теперь укажите стартовый лимит по безналу.\n"
+                f"{bank_hint}\n"
+                "Можно отправить `+`, чтобы принять остаток."
+            )
         )
         return
 
@@ -191,7 +204,7 @@ def deal_steps(notification: Notification) -> None:
             {"amount": amount, "comment": comment},
         )
         switch_state(notification, States.DEAL_PAYMENT_METHOD.value)
-        notification.answer("Укажите способ: Наличка или Банк.")
+        notification.answer(_with_worker_hint("Укажите способ: Наличка или Банк."))
         return
 
     if state_name == States.DEAL_PAYMENT_METHOD.value:
@@ -200,7 +213,7 @@ def deal_steps(notification: Notification) -> None:
             return
         method = _parse_payment_method(text)
         if not method:
-            notification.answer("Напишите `Наличка` или `Банк`.")
+            notification.answer(_with_worker_hint("Напишите `Наличка` или `Банк`."))
             return
         data = notification.state_manager.get_state_data(notification.sender) or {}
         amount = data.get("amount")
@@ -234,12 +247,12 @@ def deal_steps(notification: Notification) -> None:
 
         message = (
             f"✅ Операция #{deal.id} сохранена.\n"
-            f"Сумма: {deal.total_amount}\n"
+            f"Сумма: {format_amount(deal.total_amount)}\n"
             f"Способ: {format_payment_method(deal.payment_method)}"
             + (f"\nКомментарий: {deal.comment}" if deal.comment else "")
         )
         if balance_after is not None:
-            message += f"\n💼 Баланс: {balance_after}"
+            message += f"\n💼 Баланс: {format_amount(balance_after)}"
         notification.answer(message)
 
 
@@ -267,7 +280,7 @@ def installment_steps(notification: Notification) -> None:
             {"installment_price": str(price)},
         )
         switch_state(notification, States.INSTALLMENT_PERCENT.value)
-        notification.answer("Введите процент наценки (например, 20).")
+        notification.answer(_with_worker_hint("Введите процент наценки (например, 20)."))
         return
 
     if state_name == States.INSTALLMENT_PERCENT.value:
@@ -281,7 +294,7 @@ def installment_steps(notification: Notification) -> None:
             {"installment_percent": str(percent)},
         )
         switch_state(notification, States.INSTALLMENT_TERM.value)
-        notification.answer("Укажите срок в месяцах (например, 6).")
+        notification.answer(_with_worker_hint("Укажите срок в месяцах (например, 6)."))
         return
 
     if state_name == States.INSTALLMENT_TERM.value:
@@ -295,13 +308,15 @@ def installment_steps(notification: Notification) -> None:
             {"installment_term": str(term)},
         )
         switch_state(notification, States.INSTALLMENT_PAYMENT_METHOD.value)
-        notification.answer("Выберите способ оплаты первого взноса: Наличка или Банк.")
+        notification.answer(
+            _with_worker_hint("Выберите способ оплаты первого взноса: Наличка или Банк.")
+        )
         return
 
     if state_name == States.INSTALLMENT_PAYMENT_METHOD.value:
         method = _parse_payment_method(text)
         if not method:
-            notification.answer("Напишите `Наличка` или `Банк`.")
+            notification.answer(_with_worker_hint("Напишите `Наличка` или `Банк`."))
             return
         try:
             user = user_service.get_active_user_by_phone(notification.sender)
@@ -314,7 +329,9 @@ def installment_steps(notification: Notification) -> None:
             total = price + markup
             down_payment = markup
             remaining = total - down_payment
-            monthly = remaining / term if term else remaining
+            monthly = (remaining / term if term else remaining).quantize(
+                Decimal("1"), rounding=ROUND_HALF_UP
+            )
             deal = deal_service.create_deal(
                 worker=user,
                 client_name=None,
@@ -341,11 +358,11 @@ def installment_steps(notification: Notification) -> None:
         notification.answer(
             "✅ Рассрочка зафиксирована.\n"
             f"ID операции: #{deal.id}\n"
-            f"Цена товара: {price}\n"
-            f"Наценка: {markup} ({percent}%)\n"
-            f"Первый взнос: {down_payment}\n"
-            f"Сумма рассрочки: {total}\n"
-            f"Ежемесячный платёж: {monthly}"
+            f"Цена товара: {format_amount(price)}\n"
+            f"Наценка: {format_amount(markup)} ({percent}%)\n"
+            f"Первый взнос: {format_amount(down_payment)}\n"
+            f"Сумма рассрочки: {format_amount(total)}\n"
+            f"Ежемесячный платёж: {format_amount(monthly)}"
         )
 def _send_balance(notification: Notification) -> None:
     try:
@@ -355,9 +372,9 @@ def _send_balance(notification: Notification) -> None:
         breakdown = deal_service.get_balance_breakdown(user)
         notification.answer(
             "💼 Баланс смены:\n"
-            f"Наличка: {breakdown['cash']}\n"
-            f"Банк: {breakdown['bank']}\n"
-            f"Итого: {breakdown['total']}"
+            f"Наличка: {format_amount(breakdown['cash'])}\n"
+            f"Банк: {format_amount(breakdown['bank'])}\n"
+            f"Итого: {format_amount(breakdown['total'])}"
         )
     except Exception as exc:  # noqa: BLE001
         notification.answer(str(exc))
@@ -378,7 +395,7 @@ def _send_deals(notification: Notification) -> None:
             comment = f" ({d.comment})" if d.comment else ""
             type_label = "Рассрочка" if getattr(d, "deal_type", None) == DealType.INSTALLMENT.value else "Операция"
             lines.append(
-                f"#{d.id} [{type_label}] {d.client_name or ''} — {d.total_amount} [{label}] ({d.created_at.date()}){comment}"
+                f"#{d.id} [{type_label}] {d.client_name or ''} — {format_amount(d.total_amount)} [{label}] ({d.created_at.date()}){comment}"
             )
         notification.answer("🧾 Последние операции:\n" + "\n".join(lines))
         notification.state_manager.set_state(
@@ -428,11 +445,11 @@ def deal_details_step(notification: Notification) -> None:
         extra = ""
         if deal.deal_type == DealType.INSTALLMENT:
             extra = (
-                f"Цена: {deal.product_price}\n"
-                f"Наценка: {deal.markup_amount} ({deal.markup_percent}%)\n"
-                f"Первый взнос: {deal.down_payment_amount}\n"
-                f"Сумма рассрочки: {deal.installment_total_amount}\n"
-                f"Ежемесячный платёж: {deal.monthly_payment_amount}\n"
+                f"Цена: {format_amount(deal.product_price)}\n"
+                f"Наценка: {format_amount(deal.markup_amount)} ({deal.markup_percent}%)\n"
+                f"Первый взнос: {format_amount(deal.down_payment_amount)}\n"
+                f"Сумма рассрочки: {format_amount(deal.installment_total_amount)}\n"
+                f"Ежемесячный платёж: {format_amount(deal.monthly_payment_amount)}\n"
             )
         notification.answer(
             "ℹ️ Операция #{id}\n"
@@ -445,7 +462,7 @@ def deal_details_step(notification: Notification) -> None:
             "Введите другой ID или 0 для выхода.".format(
                 id=deal.id,
                 kind="Рассрочка" if deal.deal_type == DealType.INSTALLMENT else "Финансовая операция",
-                amount=deal.total_amount,
+                amount=format_amount(deal.total_amount),
                 method=format_payment_method(deal.payment_method),
                 extra=extra,
                 comment=f"Комментарий: {deal.comment}\n" if deal.comment else "",

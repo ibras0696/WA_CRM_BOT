@@ -14,6 +14,7 @@ from crm_bot.services import users as user_service
 from crm_bot.services import shifts as shift_service
 from crm_bot.services import deals as deal_service
 from crm_bot.utils.timezones import adapt_datetime_for_db
+from crm_bot.utils.formatting import format_amount
 
 MOSCOW_TZ = ZoneInfo("Europe/Moscow")
 
@@ -151,8 +152,7 @@ def build_deals_report(
 
 
 def _format_money(value: Decimal | int | float) -> str:
-    amount = Decimal(value or 0).quantize(Decimal("0.01"))
-    return f"{amount:,.2f}".replace(",", " ")
+    return format_amount(value)
 
 
 def _aggregate_columns() -> tuple:

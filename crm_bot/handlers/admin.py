@@ -23,6 +23,7 @@ from crm_bot.states.admin import (
 )
 from crm_bot.handlers.utils import handle_menu_shortcut
 from crm_bot.utils.fsm import get_state_name, switch_state
+from crm_bot.utils.formatting import format_amount
 
 ADMIN_MENU_BUTTONS = [
     "Добавить сотрудника",
@@ -42,6 +43,11 @@ FULL_REPORT_BUTTONS = [
 TODAY_DEALS_PREVIEW_LIMIT = 5
 CANCEL_KEYWORDS = {"отмена", "cancel", "выход", "stop"}
 CANCEL_MESSAGE = "❌ Запрос отменён."
+ADMIN_MENU_HINT = "ℹ️ Чтобы вернуться в админ-меню, отправьте `0`."
+
+
+def _with_admin_hint(text: str) -> str:
+    return f"{text}\n\n{ADMIN_MENU_HINT}"
 
 
 def admin_menu_handler(notification: Notification) -> None:
@@ -69,19 +75,21 @@ def admin_buttons_handler(notification: Notification, txt: str) -> None:
     logging.debug("admin button handler triggered: sender=%s text=%s", notification.sender, txt)
     match txt:
         case "Добавить сотрудника":
-            notification.answer("➕ Введите номер сотрудника в формате 7XXXXXXXXXX.")
+            notification.answer(
+                _with_admin_hint("➕ Введите номер сотрудника в формате 7XXXXXXXXXX.")
+            )
             notification.state_manager.set_state(
                 notification.sender,
                 AdminAddManagerStates.SENDER.value,
             )
         case "Отключить сотрудника":
-            notification.answer("🚫 Введите номер сотрудника для отключения.")
+            notification.answer(_with_admin_hint("🚫 Введите номер сотрудника для отключения."))
             notification.state_manager.set_state(
                 notification.sender,
                 AdminDeleteManagerStates.SENDER.value,
             )
         case "Корректировка баланса":
-            notification.answer("⚖️ Введите номер сотрудника для корректировки.")
+            notification.answer(_with_admin_hint("⚖️ Введите номер сотрудника для корректировки."))
             notification.state_manager.set_state(
                 notification.sender,
                 AdminAdjustBalanceStates.WORKER_PHONE.value,
@@ -94,9 +102,11 @@ def admin_buttons_handler(notification: Notification, txt: str) -> None:
             )
         case "Отчёт":
             notification.answer(
-                "📅 Введите даты отчёта: начало и (опционально) конец + номер сотрудника.\n"
-                "Формат: YYYY-MM-DD [YYYY-MM-DD] [номер]\n"
-                "Пример: 2025-01-01 2025-01-31 79991234567"
+                _with_admin_hint(
+                    "📅 Введите даты отчёта: начало и (опционально) конец + номер сотрудника.\n"
+                    "Формат: YYYY-MM-DD [YYYY-MM-DD] [номер]\n"
+                    "Пример: 2025-01-01 2025-01-31 79991234567"
+                )
             )
             notification.state_manager.set_state(
                 notification.sender,
@@ -123,7 +133,7 @@ def admin_add_new_manager(notification: Notification) -> None:
         notification.state_manager.delete_state(notification.sender)
         return
     if not text:
-        notification.answer("Номер не должен быть пустым.")
+        notification.answer(_with_admin_hint("Номер не должен быть пустым."))
         return
 
     try:
@@ -147,7 +157,7 @@ def admin_delete_manager(notification: Notification) -> None:
         notification.state_manager.delete_state(notification.sender)
         return
     if not text:
-        notification.answer("Номер не должен быть пустым.")
+        notification.answer(_with_admin_hint("Номер не должен быть пустым."))
         return
 
     try:
@@ -175,20 +185,22 @@ def admin_adjust_balance(notification: Notification) -> None:
             {"worker_phone": raw},
         )
         switch_state(notification, AdminAdjustBalanceStates.BALANCE_KIND.value)
-        notification.answer("Какой баланс корректируем? Напишите `Наличка` или `Банк`.")
+        notification.answer(
+            _with_admin_hint("Какой баланс корректируем? Напишите `Наличка` или `Банк`.")
+        )
         return
 
     if state_name == AdminAdjustBalanceStates.BALANCE_KIND.value:
         method = _parse_balance_kind(raw)
         if not method:
-            notification.answer("Укажите `Наличка` или `Банк`.")
+            notification.answer(_with_admin_hint("Укажите `Наличка` или `Банк`."))
             return
         notification.state_manager.update_state_data(
             notification.sender,
             {"balance_kind": method.value},
         )
         switch_state(notification, AdminAdjustBalanceStates.DELTA.value)
-        notification.answer("Введите дельту (+/-) в рублях.")
+        notification.answer(_with_admin_hint("Введите дельту (+/-) в рублях."))
         return
 
     data = notification.state_manager.get_state_data(notification.sender) or {}
@@ -238,7 +250,7 @@ def admin_manager_report(notification: Notification) -> None:
         notification.state_manager.delete_state(notification.sender)
         return
     if not text:
-        notification.answer("Укажите даты.")
+        notification.answer(_with_admin_hint("Укажите даты."))
         return
 
     normalized = text.lower()
@@ -280,9 +292,11 @@ def handle_full_report_choice(notification: Notification, choice: str) -> None:
             AdminFullReportStates.CUSTOM_RANGE.value,
         )
         notification.answer(
-            "🗓️ Укажите даты для полного отчёта.\n"
-            "Формат: YYYY-MM-DD [YYYY-MM-DD]\n"
-            "Пример: 2025-01-01 2025-01-31"
+            _with_admin_hint(
+                "🗓️ Укажите даты для полного отчёта.\n"
+                "Формат: YYYY-MM-DD [YYYY-MM-DD]\n"
+                "Пример: 2025-01-01 2025-01-31"
+            )
         )
         return
 
@@ -306,7 +320,7 @@ def admin_full_report_custom(notification: Notification) -> None:
         notification.state_manager.delete_state(notification.sender)
         return
     if not text:
-        notification.answer("Укажите даты.")
+        notification.answer(_with_admin_hint("Укажите даты."))
         return
 
     normalized = text.lower()
@@ -356,7 +370,7 @@ def _prepare_delete_deals_prompt() -> str:
     preview = _format_today_deals()
     return (
         "🗑️ Введите ID операции для удаления (число).\n"
-        f"{preview}"
+        f"{preview}\n\n{ADMIN_MENU_HINT}"
     )
 
 
@@ -368,7 +382,7 @@ def _format_today_deals(limit: int = TODAY_DEALS_PREVIEW_LIMIT) -> str:
     lines = []
     for item in deals:
         worker_label = item.worker_name or item.worker_phone or "сотрудник не указан"
-        amount = f"{item.total_amount:,.2f}".replace(",", " ")
+        amount = format_amount(item.total_amount)
         method = _format_payment_method(item.payment_method)
         comment = f" [{item.comment}]" if item.comment else ""
         type_label = (
