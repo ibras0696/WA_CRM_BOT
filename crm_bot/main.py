@@ -293,7 +293,7 @@ def deal_details_handler(notification: Notification) -> None:
     state=None,
 )
 def base_menu_handler(notification: Notification) -> None:
-    """Обрабатывает входящие текстовые сообщения (0/1)."""
+    """Обрабатывает входящие текстовые сообщения (Админ/Менеджер)."""
     logger.debug(
         "incoming text message: sender=%s type=%s text=%s",
         notification.sender,
@@ -308,7 +308,7 @@ def base_menu_handler(notification: Notification) -> None:
     state=None,
 )
 def outgoing_base_menu_handler(notification: Notification) -> None:
-    """Обрабатывает отправленные вручную текстовые сообщения (0/1) через outgoing hook."""
+    """Обрабатывает отправленные вручную текстовые сообщения (Админ/Менеджер) через outgoing hook."""
     logger.debug(
         "outgoing text message: sender=%s type=%s text=%s",
         notification.sender,

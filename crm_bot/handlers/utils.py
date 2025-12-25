@@ -12,22 +12,28 @@ def handle_menu_shortcut(
     allow_admin: bool = True,
     allow_worker: bool = True,
 ) -> bool:
-    """Если пользователь ввёл 0/1, переводит его в меню и возвращает True.
+    """Если пользователь ввёл команду меню (Админ/Менеджер), переводит его в меню и возвращает True.
 
-    :param allow_admin: реагировать на `0`
-    :param allow_worker: реагировать на `1`
+    :param allow_admin: реагировать на `Админ`
+    :param allow_worker: реагировать на `Менеджер`
     """
     cleaned = (text or "").strip()
     triggered = False
 
-    from crm_bot.handlers.menu import handle_menu_command
+    from crm_bot.handlers.menu import (
+        handle_menu_command,
+        ADMIN_MENU_COMMANDS,
+        WORKER_MENU_COMMANDS,
+    )
 
-    if allow_admin and cleaned == "0":
-        handle_menu_command(notification, txt="0")
+    lowered = cleaned.lower()
+
+    if allow_admin and lowered in ADMIN_MENU_COMMANDS:
+        handle_menu_command(notification, txt="Админ")
         triggered = True
 
-    if allow_worker and cleaned == "1":
-        handle_menu_command(notification, txt="1")
+    if allow_worker and lowered in WORKER_MENU_COMMANDS:
+        handle_menu_command(notification, txt="Менеджер")
         triggered = True
 
     return triggered

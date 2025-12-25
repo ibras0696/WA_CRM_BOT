@@ -24,7 +24,7 @@ WORKER_MENU_BUTTONS = [
     "Мои операции",
 ]
 
-WORKER_MENU_HINT = "ℹ️ Чтобы вернуться в меню сотрудника, отправьте `1`."
+WORKER_MENU_HINT = "ℹ️ Чтобы вернуться в меню сотрудника, напишите `Менеджер`."
 
 
 def _with_worker_hint(text: str) -> str:
@@ -128,7 +128,7 @@ def open_shift_step(notification: Notification) -> None:
     raw = notification.get_message_text().strip()
     if handle_back_command(notification, raw):
         return
-    if handle_menu_shortcut(notification, raw, allow_worker=False):
+    if handle_menu_shortcut(notification, raw):
         notification.state_manager.delete_state(notification.sender)
         return
 
@@ -188,7 +188,7 @@ def deal_steps(notification: Notification) -> None:
     if handle_back_command(notification, text):
         return
     if state_name != States.DEAL_PAYMENT_METHOD.value:
-        if handle_menu_shortcut(notification, text, allow_worker=False):
+        if handle_menu_shortcut(notification, text):
             notification.state_manager.delete_state(notification.sender)
             return
 
@@ -263,7 +263,7 @@ def installment_steps(notification: Notification) -> None:
     text = notification.get_message_text().strip()
     if handle_back_command(notification, text):
         return
-    if handle_menu_shortcut(notification, text, allow_worker=False):
+    if handle_menu_shortcut(notification, text):
         notification.state_manager.delete_state(notification.sender)
         return
 
@@ -402,7 +402,7 @@ def _send_deals(notification: Notification) -> None:
             notification.sender,
             States.DEAL_DETAILS.value,
         )
-        notification.answer("Введите ID операции для подробностей или 0 — чтобы вернуться в меню.")
+        notification.answer("Введите ID операции для подробностей или напишите «Менеджер», чтобы вернуться в меню.")
     except Exception as exc:  # noqa: BLE001
         notification.answer(str(exc))
 
@@ -413,18 +413,16 @@ def deal_details_step(notification: Notification) -> None:
     if handle_back_command(notification, text):
         notification.state_manager.delete_state(notification.sender)
         return
-    if not text:
-        notification.answer("Введите ID операции или 0 для выхода.")
-        return
-
-    if text == "0":
-        handle_menu_shortcut(notification, text, allow_worker=False)
+    if handle_menu_shortcut(notification, text, allow_admin=False):
         notification.state_manager.delete_state(notification.sender)
+        return
+    if not text:
+        notification.answer("Введите ID операции или напишите «Менеджер» для возврата.")
         return
 
     normalized = text.lstrip("#").strip()
     if not normalized:
-        notification.answer("Введите ID операции или 0 для выхода.")
+        notification.answer("Введите ID операции или напишите «Менеджер» для возврата.")
         return
 
     try:
@@ -459,7 +457,7 @@ def deal_details_step(notification: Notification) -> None:
             "{extra}"
             "{comment}"
             "Дата: {ts:%d.%m.%Y %H:%M}\n"
-            "Введите другой ID или 0 для выхода.".format(
+            "Введите другой ID или напишите «Менеджер», чтобы вернуться в меню.".format(
                 id=deal.id,
                 kind="Рассрочка" if deal.deal_type == DealType.INSTALLMENT else "Финансовая операция",
                 amount=format_amount(deal.total_amount),

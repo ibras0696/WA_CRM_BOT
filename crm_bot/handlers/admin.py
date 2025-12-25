@@ -43,7 +43,7 @@ FULL_REPORT_BUTTONS = [
 TODAY_DEALS_PREVIEW_LIMIT = 5
 CANCEL_KEYWORDS = {"отмена", "cancel", "выход", "stop"}
 CANCEL_MESSAGE = "❌ Запрос отменён."
-ADMIN_MENU_HINT = "ℹ️ Чтобы вернуться в админ-меню, отправьте `0`."
+ADMIN_MENU_HINT = "ℹ️ Чтобы вернуться в админ-меню, напишите `Админ`."
 
 
 def _with_admin_hint(text: str) -> str:
@@ -254,14 +254,9 @@ def admin_manager_report(notification: Notification) -> None:
         return
 
     normalized = text.lower()
-    if normalized in CANCEL_KEYWORDS or text in {"0", "1"}:
+    if normalized in CANCEL_KEYWORDS:
         notification.state_manager.delete_state(notification.sender)
-        if text in {"0", "1"}:
-            from crm_bot.handlers.menu import handle_menu_command
-
-            handle_menu_command(notification, txt=text)
-        else:
-            notification.answer(CANCEL_MESSAGE)
+        notification.answer(CANCEL_MESSAGE)
         return
 
     parts = text.split()

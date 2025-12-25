@@ -1,4 +1,4 @@
-"""Общая логика клиентского меню (текстовые команды 0/1)."""
+"""Общая логика клиентского меню (текстовые команды «Админ» / «Менеджер»)."""
 
 from __future__ import annotations
 
@@ -11,25 +11,27 @@ from crm_bot.handlers.manage import manage_menu_handler
 from crm_bot.services import users as user_service
 from crm_bot.utils.auth import is_authorized_admin
 
-MENU_HELP_TEXT = "Отправьте 0 (админ) или 1 (меню сотрудника)."
+MENU_HELP_TEXT = "Напишите «Админ» или «Менеджер», чтобы открыть меню."
 FULL_HELP_TEXT = (
     "👋 *CRM WA Bot* помогает вести выдачи и лимиты прямо в WhatsApp.\n\n"
     "🔐 Доступ выдаёт администратор. Пока ваш номер не активирован, бот отвечает только подсказкой.\n\n"
-    "👑 *Админ меню* — отправьте `0`:\n"
+    "👑 *Админ меню* — напишите `Админ`:\n"
     "• добавление/отключение сотрудников\n"
     "• корректировка лимита (нал или банк)\n"
     "• удаление операций и отчёты за период\n"
     "• кнопка «Полный отчёт» (день/месяц/год/период)\n\n"
-    "👷 *Меню сотрудника* — отправьте `1`:\n"
+    "👷 *Меню сотрудника* — напишите `Менеджер`:\n"
     "• открыть или закрыть смену (отдельно для налички/банка)\n"
     "• зафиксировать рассрочку (цена, наценка, срок) или обычную фин. операцию\n"
     "• посмотреть текущий лимит по каждому карману и последние операции\n\n"
-    "ℹ️ Кнопки приходят в виде клавиатуры. Если нужно начать заново — отправьте `0` или `1`, состояние сбросится."
+    "ℹ️ Кнопки приходят в виде клавиатуры. Если нужно начать заново — напишите `Админ` или `Менеджер`, состояние сбросится."
 )
 ADMIN_FORBIDDEN_TEXT = "Недостаточно прав для открытия админ-меню."
 WORKER_FORBIDDEN_TEXT = "Нет доступа. Доступ выдаёт администратор."
 HELP_COMMANDS = {"help", "меню", "menu", "помощь"}
-MENU_COMMANDS = {"0", "1"}
+ADMIN_MENU_COMMANDS = {"админ", "admin"}
+WORKER_MENU_COMMANDS = {"менеджер", "manager", "worker", "сотрудник"}
+MENU_COMMANDS = ADMIN_MENU_COMMANDS | WORKER_MENU_COMMANDS
 CANCEL_ON_ZERO = True
 
 
@@ -61,29 +63,29 @@ def _clear_state(notification: Notification) -> None:
 
 
 def handle_menu_command(notification: Notification, txt: str | None = None) -> None:
-    """Обрабатывает текстовые команды верхнего уровня (0/1)."""
+    """Обрабатывает текстовые команды верхнего уровня (Админ/Менеджер)."""
     text = (txt or notification.get_message_text() or "").strip()
     logging.debug("menu command received: sender=%s text=%s", notification.sender, text)
     if not text:
         return
 
     normalized = text.lower()
-    if text not in MENU_COMMANDS and normalized not in HELP_COMMANDS:
+    if normalized not in MENU_COMMANDS and normalized not in HELP_COMMANDS:
         return
 
     state = _get_state(notification)
-    if state and text in MENU_COMMANDS:
+    if state and normalized in MENU_COMMANDS:
         logging.debug("state cancelled by menu command: sender=%s state=%s", notification.sender, state)
         _clear_state(notification)
 
-    if text == "0":
+    if normalized in ADMIN_MENU_COMMANDS:
         if is_authorized_admin(notification.sender):
             admin_menu_handler(notification)
         else:
             notification.answer(ADMIN_FORBIDDEN_TEXT)
         return
 
-    if text == "1":
+    if normalized in WORKER_MENU_COMMANDS:
         try:
             worker = user_service.get_active_user_by_phone(notification.sender)
         except Exception as exc:  # noqa: BLE001
