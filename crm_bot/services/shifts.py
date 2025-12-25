@@ -58,17 +58,27 @@ def get_active_shift(worker_id: int, session=None) -> Shift | None:
         )
 
 
-def open_shift(worker: User, opening_balance: float | int | str | Decimal, session=None) -> Shift:
+def open_shift(
+    worker: User,
+    opening_balance_cash: float | int | str | Decimal,
+    opening_balance_bank: float | int | str | Decimal,
+    session=None,
+) -> Shift:
     """Открывает смену и создаёт стартовую транзакцию.
 
     :param worker: пользователь
-    :param opening_balance: стартовый лимит
+    :param opening_balance_cash: стартовый лимит по наличке
+    :param opening_balance_bank: стартовый лимит по безналу
     :return: созданный Shift
     :raises ValidationError: если сумма некорректна или смена уже открыта
     """
-    balance = _as_decimal(opening_balance)
-    if balance <= 0:
-        raise ValidationError("Стартовая сумма должна быть больше 0.")
+    cash = _as_decimal(opening_balance_cash)
+    bank = _as_decimal(opening_balance_bank)
+    if cash < 0 or bank < 0:
+        raise ValidationError("Суммы должны быть неотрицательными.")
+    if cash == 0 and bank == 0:
+        raise ValidationError("Нужно указать хотя бы одно значение больше 0.")
+    total = cash + bank
 
     with db_session(session=session) as local:
         existing = (
@@ -84,8 +94,12 @@ def open_shift(worker: User, opening_balance: float | int | str | Decimal, sessi
 
         shift = Shift(
             worker_id=worker.id,
-            opening_balance=balance,
-            current_balance=balance,
+            opening_balance_cash=cash,
+            opening_balance_bank=bank,
+            current_balance_cash=cash,
+            current_balance_bank=bank,
+            opening_balance=total,
+            current_balance=total,
             status=ShiftStatus.OPEN,
         )
         local.add(shift)
@@ -95,7 +109,7 @@ def open_shift(worker: User, opening_balance: float | int | str | Decimal, sessi
             worker_id=worker.id,
             shift_id=shift.id,
             type=CashTransactionType.OPENING,
-            amount_delta=balance,
+            amount_delta=total,
         )
         local.add(tx)
         local.flush()
@@ -126,6 +140,8 @@ def close_open_shifts(now: datetime | None = None) -> int:
 def adjust_balance(
     worker: User,
     delta: float | int | str | Decimal,
+    *,
+    method: str | None = None,
     created_by: User | None = None,
     session=None,
 ) -> Shift:
@@ -142,9 +158,14 @@ def adjust_balance(
         raise NoActiveShift("Нет активной смены.")
 
     amount = _as_decimal(delta)
+    method_value = getattr(method, "value", method)
     with db_session(session=session) as local:
         current_shift = local.get(Shift, shift.id)
-        current_shift.current_balance = (current_shift.current_balance or 0) + amount
+        if method_value == "bank":
+            current_shift.current_balance_bank = (current_shift.current_balance_bank or 0) + amount
+        else:
+            current_shift.current_balance_cash = (current_shift.current_balance_cash or 0) + amount
+        current_shift.current_balance = (current_shift.current_balance_cash or 0) + (current_shift.current_balance_bank or 0)
         tx = CashTransaction(
             worker_id=worker.id,
             shift_id=current_shift.id,
@@ -170,3 +191,16 @@ def get_last_closed_shift(worker_id: int, session=None) -> Shift | None:
             .order_by(Shift.closed_at.desc())
             .first()
         )
+
+
+def close_shift(worker: User, session=None) -> Shift:
+    """Закрывает активную смену конкретного сотрудника."""
+    shift = get_active_shift(worker.id, session=session)
+    if not shift:
+        raise NoActiveShift("Нет активной смены.")
+    current_time = datetime.now(MOSCOW_TZ)
+    with db_session(session=session) as local:
+        current_shift = local.get(Shift, shift.id)
+        current_shift.status = ShiftStatus.CLOSED
+        current_shift.closed_at = current_time
+        return current_shift

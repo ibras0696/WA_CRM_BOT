@@ -11,14 +11,16 @@ from crm_bot.services import users as user_service
 from crm_bot.services.shifts import get_last_closed_shift
 from crm_bot.states.states import States
 from crm_bot.utils.fsm import get_state_name, switch_state
-from crm_bot.handlers.utils import handle_menu_shortcut
-from crm_bot.core.models import DealPaymentMethod
+from crm_bot.handlers.utils import handle_menu_shortcut, handle_back_command
+from crm_bot.core.models import DealPaymentMethod, DealType
 
 WORKER_MENU_BUTTONS = [
     "Открыть смену",
-    "Новая сделка",
+    "Закрыть смену",
+    "Выдача рассрочки",
+    "Финансовая операция",
     "Мой баланс",
-    "Мои сделки",
+    "Мои операции",
 ]
 
 PAYMENT_CHOICES = {
@@ -50,26 +52,10 @@ def worker_buttons_handler(notification: Notification, txt: str) -> None:
     logging.debug("worker button handler triggered: sender=%s text=%s", notification.sender, txt)
     match txt:
         case "Открыть смену":
-            notification.state_manager.set_state(
-                notification.sender,
-                States.OPEN_SHIFT_AMOUNT.value,
-            )
-            last_shift = get_last_closed_shift(worker.id)
-            suggested = None
-            if last_shift and last_shift.current_balance:
-                suggested = Decimal(last_shift.current_balance or 0)
-                notification.state_manager.update_state_data(
-                    notification.sender,
-                    {"suggested_balance": str(suggested)},
-                )
-                notification.answer(
-                    f"Укажите стартовую сумму смены.\n"
-                    f"Вчерашний остаток: {suggested}\n"
-                    "Отправьте `+`, чтобы принять остаток, или введите новое значение."
-                )
-            else:
-                notification.answer("Укажите стартовую сумму смены.")
-        case "Новая сделка":
+            _start_open_shift(notification, worker)
+        case "Закрыть смену":
+            _close_shift(notification, worker)
+        case "Финансовая операция":
             notification.state_manager.set_state(
                 notification.sender,
                 States.DEAL_AMOUNT.value,
@@ -78,46 +64,116 @@ def worker_buttons_handler(notification: Notification, txt: str) -> None:
                 "💰 Введите сумму: `+` — пополнение, `-` — списание. Добавьте комментарий в той же строке.\n"
                 "Пример: `+120000 Предоплата` или `-5000 Закуп`."
             )
+        case "Выдача рассрочки":
+            notification.state_manager.set_state(
+                notification.sender,
+                States.INSTALLMENT_PRICE.value,
+            )
+            notification.answer("Введите цену товара (руб).")
         case "Мой баланс":
             _send_balance(notification)
-        case "Мои сделки":
+        case "Мои операции":
             _send_deals(notification)
         case _:
             notification.answer("📌 Команда пока не поддерживается.")
 
 
-def open_shift_step(notification: Notification) -> None:
-    """FSM шаг: ввод суммы для открытия смены."""
-    amount = notification.get_message_text().strip()
-    if handle_menu_shortcut(notification, amount, allow_worker=False):
-        notification.state_manager.delete_state(notification.sender)
-        return
+def _start_open_shift(notification: Notification, worker) -> None:
+    notification.state_manager.set_state(
+        notification.sender,
+        States.OPEN_SHIFT_CASH.value,
+    )
+    last_shift = get_last_closed_shift(worker.id)
+    suggested_cash = suggested_bank = None
+    if last_shift:
+        suggested_cash = Decimal(last_shift.current_balance_cash or 0)
+        suggested_bank = Decimal(last_shift.current_balance_bank or 0)
+        notification.state_manager.update_state_data(
+            notification.sender,
+            {
+                "suggested_cash": str(suggested_cash),
+                "suggested_bank": str(suggested_bank),
+            },
+        )
+    cash_hint = f"Вчерашний остаток: {suggested_cash}" if suggested_cash else "Если остатка нет, введите 0."
+    notification.answer(
+        "Укажите стартовый лимит по наличке.\n"
+        f"{cash_hint}\n"
+        "Можно отправить `+`, чтобы принять остаток."
+    )
+
+
+def _close_shift(notification: Notification, worker) -> None:
     try:
-        user = user_service.get_active_user_by_phone(notification.sender)
-        if not user:
-            raise Exception("Нет доступа. Обратитесь к админу.")
-        data = notification.state_manager.get_state_data(notification.sender) or {}
-        suggested = data.get("suggested_balance")
-        if amount == "+":
-            if not suggested:
-                raise Exception("Нет сохранённого остатка. Введите сумму вручную.")
-            shift_service.open_shift(user, suggested)
-        else:
-            shift_service.open_shift(user, amount)
-    except Exception as exc:  # noqa: BLE001
+        shift_service.close_shift(worker)
+    except shift_service.NoActiveShift as exc:
         notification.answer(str(exc))
         return
-    finally:
-        notification.state_manager.delete_state(notification.sender)
+    notification.answer("🔒 Смена закрыта.")
 
-    notification.answer("✅ Смена открыта. Можно создавать сделки.")
+
+def open_shift_step(notification: Notification) -> None:
+    """FSM шаг: ввод суммы для открытия смены."""
+    raw = notification.get_message_text().strip()
+    if handle_back_command(notification, raw):
+        return
+    if handle_menu_shortcut(notification, raw, allow_worker=False):
+        notification.state_manager.delete_state(notification.sender)
+        return
+
+    state = get_state_name(notification.state_manager.get_state(notification.sender))
+    data = notification.state_manager.get_state_data(notification.sender) or {}
+    if state == States.OPEN_SHIFT_CASH.value:
+        try:
+            cash = _resolve_opening_input(raw, data.get("suggested_cash"))
+        except ValueError as exc:
+            notification.answer(str(exc))
+            return
+        notification.state_manager.update_state_data(
+            notification.sender,
+            {"opening_cash": str(cash)},
+        )
+        switch_state(notification, States.OPEN_SHIFT_BANK.value)
+        bank_hint = (
+            f"Вчерашний остаток: {data.get('suggested_bank')}"
+            if data.get("suggested_bank")
+            else "Если остатка нет, введите 0."
+        )
+        notification.answer(
+            "Теперь укажите стартовый лимит по безналу.\n"
+            f"{bank_hint}\n"
+            "Можно отправить `+`, чтобы принять остаток."
+        )
+        return
+
+    if state == States.OPEN_SHIFT_BANK.value:
+        try:
+            bank = _resolve_opening_input(raw, data.get("suggested_bank"))
+        except ValueError as exc:
+            notification.answer(str(exc))
+            return
+        opening_cash = Decimal(data.get("opening_cash") or "0")
+        try:
+            user = user_service.get_active_user_by_phone(notification.sender)
+            if not user:
+                raise Exception("Нет доступа. Обратитесь к админу.")
+            shift_service.open_shift(user, opening_cash, bank)
+        except Exception as exc:  # noqa: BLE001
+            notification.answer(str(exc))
+            return
+        finally:
+            notification.state_manager.delete_state(notification.sender)
+
+        notification.answer("✅ Смена открыта. Можно создавать операции.")
 
 
 def deal_steps(notification: Notification) -> None:
-    """FSM шаги создания сделки."""
+    """FSM шаги создания операции."""
     state = notification.state_manager.get_state(notification.sender)
     state_name = get_state_name(state)
     text = notification.get_message_text().strip()
+    if handle_back_command(notification, text):
+        return
     if state_name != States.DEAL_PAYMENT_METHOD.value:
         if handle_menu_shortcut(notification, text, allow_worker=False):
             notification.state_manager.delete_state(notification.sender)
@@ -139,6 +195,9 @@ def deal_steps(notification: Notification) -> None:
         return
 
     if state_name == States.DEAL_PAYMENT_METHOD.value:
+        if handle_menu_shortcut(notification, text):
+            notification.state_manager.delete_state(notification.sender)
+            return
         method = _parse_payment_method(text)
         if not method:
             notification.answer("Напишите `Наличка` или `Банк`.")
@@ -174,7 +233,7 @@ def deal_steps(notification: Notification) -> None:
             notification.state_manager.delete_state(notification.sender)
 
         message = (
-            f"✅ Сделка #{deal.id} сохранена.\n"
+            f"✅ Операция #{deal.id} сохранена.\n"
             f"Сумма: {deal.total_amount}\n"
             f"Способ: {format_payment_method(deal.payment_method)}"
             + (f"\nКомментарий: {deal.comment}" if deal.comment else "")
@@ -184,13 +243,122 @@ def deal_steps(notification: Notification) -> None:
         notification.answer(message)
 
 
+def installment_steps(notification: Notification) -> None:
+    """FSM шаги создания рассрочки."""
+    state = notification.state_manager.get_state(notification.sender)
+    state_name = get_state_name(state)
+    text = notification.get_message_text().strip()
+    if handle_back_command(notification, text):
+        return
+    if handle_menu_shortcut(notification, text, allow_worker=False):
+        notification.state_manager.delete_state(notification.sender)
+        return
+
+    data = notification.state_manager.get_state_data(notification.sender) or {}
+
+    if state_name == States.INSTALLMENT_PRICE.value:
+        try:
+            price = _parse_positive_decimal(text)
+        except ValueError as exc:
+            notification.answer(str(exc))
+            return
+        notification.state_manager.update_state_data(
+            notification.sender,
+            {"installment_price": str(price)},
+        )
+        switch_state(notification, States.INSTALLMENT_PERCENT.value)
+        notification.answer("Введите процент наценки (например, 20).")
+        return
+
+    if state_name == States.INSTALLMENT_PERCENT.value:
+        try:
+            percent = _parse_positive_decimal(text)
+        except ValueError as exc:
+            notification.answer(str(exc))
+            return
+        notification.state_manager.update_state_data(
+            notification.sender,
+            {"installment_percent": str(percent)},
+        )
+        switch_state(notification, States.INSTALLMENT_TERM.value)
+        notification.answer("Укажите срок в месяцах (например, 6).")
+        return
+
+    if state_name == States.INSTALLMENT_TERM.value:
+        try:
+            term = _parse_positive_int(text)
+        except ValueError as exc:
+            notification.answer(str(exc))
+            return
+        notification.state_manager.update_state_data(
+            notification.sender,
+            {"installment_term": str(term)},
+        )
+        switch_state(notification, States.INSTALLMENT_PAYMENT_METHOD.value)
+        notification.answer("Выберите способ оплаты первого взноса: Наличка или Банк.")
+        return
+
+    if state_name == States.INSTALLMENT_PAYMENT_METHOD.value:
+        method = _parse_payment_method(text)
+        if not method:
+            notification.answer("Напишите `Наличка` или `Банк`.")
+            return
+        try:
+            user = user_service.get_active_user_by_phone(notification.sender)
+            if not user:
+                raise Exception("Нет доступа. Обратитесь к админу.")
+            price = Decimal(data.get("installment_price"))
+            percent = Decimal(data.get("installment_percent"))
+            term = int(data.get("installment_term"))
+            markup = (price * percent) / Decimal("100")
+            total = price + markup
+            down_payment = markup
+            remaining = total - down_payment
+            monthly = remaining / term if term else remaining
+            deal = deal_service.create_deal(
+                worker=user,
+                client_name=None,
+                client_phone=None,
+                total_amount=-price,
+                payment_method=method,
+                deal_type=DealType.INSTALLMENT,
+                installment_data={
+                    "product_price": price,
+                    "markup_percent": percent,
+                    "markup_amount": markup,
+                    "installment_term_months": term,
+                    "down_payment_amount": down_payment,
+                    "installment_total_amount": total,
+                    "monthly_payment_amount": monthly,
+                },
+            )
+        except Exception as exc:  # noqa: BLE001
+            notification.answer(str(exc))
+            return
+        finally:
+            notification.state_manager.delete_state(notification.sender)
+
+        notification.answer(
+            "✅ Рассрочка зафиксирована.\n"
+            f"ID операции: #{deal.id}\n"
+            f"Цена товара: {price}\n"
+            f"Наценка: {markup} ({percent}%)\n"
+            f"Первый взнос: {down_payment}\n"
+            f"Сумма рассрочки: {total}\n"
+            f"Ежемесячный платёж: {monthly}"
+        )
 def _send_balance(notification: Notification) -> None:
     try:
         user = user_service.get_active_user_by_phone(notification.sender)
         if not user:
             raise Exception("Нет доступа. Обратитесь к админу.")
-        balance = deal_service.get_active_balance(user)
-        notification.answer(f"💼 Текущий лимит: {balance}")
+        breakdown = deal_service.get_balance_breakdown(user)
+        notification.answer(
+            "💼 Баланс смены:\n"
+            f"Наличка: {breakdown['cash']}\n"
+            f"Банк: {breakdown['bank']}\n"
+            f"Итого: {breakdown['total']}"
+        )
     except Exception as exc:  # noqa: BLE001
         notification.answer(str(exc))
 
@@ -202,30 +370,34 @@ def _send_deals(notification: Notification) -> None:
             raise Exception("Нет доступа. Обратитесь к админу.")
         deals = deal_service.list_worker_deals(user)
         if not deals:
-            notification.answer("Сделок нет.")
+            notification.answer("Операций нет.")
             return
         lines = []
         for d in deals:
             label = format_payment_method(d.payment_method)
             comment = f" ({d.comment})" if d.comment else ""
+            type_label = "Рассрочка" if getattr(d, "deal_type", None) == DealType.INSTALLMENT.value else "Операция"
             lines.append(
-                f"#{d.id} {d.client_name} — {d.total_amount} [{label}] ({d.created_at.date()}){comment}"
+                f"#{d.id} [{type_label}] {d.client_name or ''} — {d.total_amount} [{label}] ({d.created_at.date()}){comment}"
             )
-        notification.answer("🧾 Последние сделки:\n" + "\n".join(lines))
+        notification.answer("🧾 Последние операции:\n" + "\n".join(lines))
         notification.state_manager.set_state(
             notification.sender,
             States.DEAL_DETAILS.value,
         )
-        notification.answer("Введите ID сделки для подробностей или 0 — чтобы вернуться в меню.")
+        notification.answer("Введите ID операции для подробностей или 0 — чтобы вернуться в меню.")
     except Exception as exc:  # noqa: BLE001
         notification.answer(str(exc))
 
 
 def deal_details_step(notification: Notification) -> None:
-    """Позволяет посмотреть подробности сделки после списка."""
+    """Позволяет посмотреть подробности операции после списка."""
     text = notification.get_message_text().strip()
+    if handle_back_command(notification, text):
+        notification.state_manager.delete_state(notification.sender)
+        return
     if not text:
-        notification.answer("Введите ID сделки или 0 для выхода.")
+        notification.answer("Введите ID операции или 0 для выхода.")
         return
 
     if text == "0":
@@ -235,13 +407,13 @@ def deal_details_step(notification: Notification) -> None:
 
     normalized = text.lstrip("#").strip()
     if not normalized:
-        notification.answer("Введите ID сделки или 0 для выхода.")
+        notification.answer("Введите ID операции или 0 для выхода.")
         return
 
     try:
         deal_id = int(normalized)
     except ValueError:
-        notification.answer("ID сделки должен быть числом.")
+        notification.answer("ID операции должен быть числом.")
         return
 
     try:
@@ -250,19 +422,32 @@ def deal_details_step(notification: Notification) -> None:
             raise Exception("Нет доступа. Обратитесь к админу.")
         deal = deal_service.get_worker_deal(user, deal_id)
         if not deal:
-            notification.answer("Сделка не найдена.")
+            notification.answer("Операция не найдена.")
             return
 
+        extra = ""
+        if deal.deal_type == DealType.INSTALLMENT:
+            extra = (
+                f"Цена: {deal.product_price}\n"
+                f"Наценка: {deal.markup_amount} ({deal.markup_percent}%)\n"
+                f"Первый взнос: {deal.down_payment_amount}\n"
+                f"Сумма рассрочки: {deal.installment_total_amount}\n"
+                f"Ежемесячный платёж: {deal.monthly_payment_amount}\n"
+            )
         notification.answer(
-            "ℹ️ Сделка #{id}\n"
+            "ℹ️ Операция #{id}\n"
+            "Тип: {kind}\n"
             "Сумма: {amount}\n"
             "Способ: {method}\n"
+            "{extra}"
             "{comment}"
             "Дата: {ts:%d.%m.%Y %H:%M}\n"
             "Введите другой ID или 0 для выхода.".format(
                 id=deal.id,
+                kind="Рассрочка" if deal.deal_type == DealType.INSTALLMENT else "Финансовая операция",
                 amount=deal.total_amount,
                 method=format_payment_method(deal.payment_method),
+                extra=extra,
                 comment=f"Комментарий: {deal.comment}\n" if deal.comment else "",
                 ts=deal.created_at,
             )
@@ -272,6 +457,20 @@ def deal_details_step(notification: Notification) -> None:
 
 
 AMOUNT_PATTERN = re.compile(r"^\s*([+-]?\s*\d+(?:[.,]\d+)?)\s*(.*)$")
+
+
+def _resolve_opening_input(raw: str, suggested: str | None) -> Decimal:
+    if raw == "+":
+        if suggested is None:
+            raise ValueError("Нет сохранённого остатка. Введите сумму вручную.")
+        return Decimal(str(suggested))
+    try:
+        value = Decimal(raw.replace(",", "."))
+    except Exception:
+        raise ValueError("Сумма должна быть числом.") from None
+    if value < 0:
+        raise ValueError("Сумма должна быть неотрицательной.")
+    return value
 
 
 def _split_amount_comment(raw: str) -> tuple[str, str | None]:
@@ -294,3 +493,23 @@ def format_payment_method(method: DealPaymentMethod | None) -> str:
     if method == DealPaymentMethod.BANK:
         return "Банк"
     return "Наличка"
+
+
+def _parse_positive_decimal(raw: str) -> Decimal:
+    try:
+        value = Decimal(raw.replace(",", "."))
+    except Exception:
+        raise ValueError("Сумма должна быть числом.") from None
+    if value <= 0:
+        raise ValueError("Сумма должна быть больше 0.")
+    return value
+
+
+def _parse_positive_int(raw: str) -> int:
+    try:
+        value = int(raw.strip())
+    except Exception:
+        raise ValueError("Число должно быть целым.")
+    if value <= 0:
+        raise ValueError("Число должно быть больше 0.")
+    return value

@@ -43,7 +43,7 @@ class CashTransactionType(str, enum.Enum):
 
 
 class DealPaymentMethod(str, enum.Enum):
-    """Способ оплаты сделки."""
+    """Способ оплаты операции."""
 
     CASH = "cash"
     BANK = "bank"
@@ -96,6 +96,10 @@ class Shift(Base):
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )
     closed_at = Column(DateTime(timezone=True))
+    opening_balance_cash = Column(Numeric(12, 2), nullable=False, server_default="0")
+    opening_balance_bank = Column(Numeric(12, 2), nullable=False, server_default="0")
+    current_balance_cash = Column(Numeric(12, 2), nullable=False, server_default="0")
+    current_balance_bank = Column(Numeric(12, 2), nullable=False, server_default="0")
     opening_balance = Column(Numeric(12, 2), nullable=False)
     current_balance = Column(Numeric(12, 2), nullable=False)
     status = Column(
@@ -113,8 +117,15 @@ class Shift(Base):
     transactions = relationship("CashTransaction", back_populates="shift")
 
 
+class DealType(str, enum.Enum):
+    """Тип операции."""
+
+    OPERATION = "operation"
+    INSTALLMENT = "installment"
+
+
 class Deal(Base):
-    """Сделка (выдача рассрочки)."""
+    """Операция (выдача/возврат средств)."""
 
     __tablename__ = "deals"
 
@@ -142,6 +153,22 @@ class Deal(Base):
         server_default=DealPaymentMethod.CASH.value,
     )
     comment = Column(String(255))
+    deal_type = Column(
+        Enum(
+            DealType,
+            name="deal_type",
+            values_callable=lambda enum: [e.value for e in enum],
+        ),
+        nullable=False,
+        server_default=DealType.OPERATION.value,
+    )
+    product_price = Column(Numeric(12, 2))
+    markup_percent = Column(Numeric(5, 2))
+    markup_amount = Column(Numeric(12, 2))
+    installment_term_months = Column(Integer)
+    down_payment_amount = Column(Numeric(12, 2))
+    installment_total_amount = Column(Numeric(12, 2))
+    monthly_payment_amount = Column(Numeric(12, 2))
     created_at = Column(
         DateTime(timezone=True),
         server_default=func.now(),
@@ -212,7 +239,7 @@ class CashTransaction(Base):
 
 
 class Payment(Base):
-    """Факт поступления оплаты по сделке (не влияет на лимит)."""
+    """Факт поступления оплаты по операции (не влияет на лимит)."""
 
     __tablename__ = "payments"
 

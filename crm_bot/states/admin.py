@@ -23,10 +23,17 @@ class AdminAdjustBalanceStates(str, Enum):
     """FSM корректировки баланса сотрудника."""
 
     WORKER_PHONE = "admin_adjust_balance_worker_phone"
+    BALANCE_KIND = "admin_adjust_balance_kind"
     DELTA = "admin_adjust_balance_delta"
 
 
 class AdminDeleteDealStates(str, Enum):
-    """FSM мягкого удаления сделки."""
+    """FSM мягкого удаления операции."""
 
     DEAL_ID = "admin_delete_deal_id"
+
+
+class AdminFullReportStates(str, Enum):
+    """FSM полного отчёта (произвольный диапазон)."""
+
+    CUSTOM_RANGE = "admin_full_report_custom_range"

@@ -7,20 +7,23 @@ from crm_bot.services import shifts
 
 
 def test_open_shift_creates_shift_and_tx(session, worker_user):
-    shift = shifts.open_shift(worker_user, 100, session=session)
+    shift = shifts.open_shift(worker_user, 100, 50, session=session)
     assert shift.id is not None
-    assert shift.current_balance == Decimal("100")
+    assert shift.current_balance_cash == Decimal("100")
+    assert shift.current_balance_bank == Decimal("50")
+    assert shift.current_balance == Decimal("150")
 
 
 def test_open_shift_prevent_double(session, worker_user):
-    shifts.open_shift(worker_user, 50, session=session)
+    shifts.open_shift(worker_user, 50, 0, session=session)
     with pytest.raises(shifts.ValidationError):
-        shifts.open_shift(worker_user, 10, session=session)
+        shifts.open_shift(worker_user, 10, 0, session=session)
 
 
 def test_adjust_balance(session, worker_user):
-    shift = shifts.open_shift(worker_user, 100, session=session)
-    updated = shifts.adjust_balance(worker_user, -30, session=session)
+    shift = shifts.open_shift(worker_user, 100, 0, session=session)
+    updated = shifts.adjust_balance(worker_user, -30, method="cash", session=session)
+    assert updated.current_balance_cash == Decimal("70")
     assert updated.current_balance == Decimal("70")
 
 

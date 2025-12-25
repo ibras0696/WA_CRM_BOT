@@ -6,17 +6,21 @@ from whatsapp_chatbot_python.filters import TEXT_TYPES
 from crm_bot.config import settings
 from crm_bot.handlers.admin import (
     ADMIN_MENU_BUTTONS,
+    FULL_REPORT_BUTTONS,
     admin_add_new_manager,
     admin_buttons_handler,
     admin_delete_manager,
     admin_delete_deal,
     admin_manager_report,
     admin_adjust_balance,
+    admin_full_report_custom,
+    handle_full_report_choice,
 )
 from crm_bot.handlers.manage import (
     worker_buttons_handler,
     open_shift_step,
     deal_steps,
+    installment_steps,
     deal_details_step,
     WORKER_MENU_BUTTONS,
 )
@@ -27,6 +31,7 @@ from crm_bot.states.admin import (
     AdminAnalyticsStates,
     AdminDeleteDealStates,
     AdminDeleteManagerStates,
+    AdminFullReportStates,
 )
 from crm_bot.states.states import States
 from crm_bot.utils.auth import is_authorized_admin
@@ -110,6 +115,9 @@ def _handle_button_payload(notification: Notification) -> None:
     if txt in admin_buttons:
         logger.debug("admin button matched: %s (%s)", txt, button_id)
         admin_buttons_handler(notification, txt)
+    elif txt in FULL_REPORT_BUTTONS:
+        logger.debug("admin full report option matched: %s (%s)", txt, button_id)
+        handle_full_report_choice(notification, txt)
     elif txt in worker_buttons:
         logger.debug("worker button matched: %s (%s)", txt, button_id)
         worker_buttons_handler(notification, txt)
@@ -180,6 +188,10 @@ def manager_report(notification: Notification) -> None:
     type_message=TEXT_TYPES,
 )
 @bot.router.message(
+    state=AdminAdjustBalanceStates.BALANCE_KIND.value,
+    type_message=TEXT_TYPES,
+)
+@bot.router.message(
     state=AdminAdjustBalanceStates.DELTA.value,
     type_message=TEXT_TYPES,
 )
@@ -196,7 +208,7 @@ def adjust_balance(notification: Notification) -> None:
     type_message=TEXT_TYPES,
 )
 def delete_deal(notification: Notification) -> None:
-    """FSM: soft-delete сделки по id."""
+    """FSM: soft-delete операции по id."""
     if not is_authorized_admin(notification.sender):
         notification.answer("Недостаточно прав для выполнения команды.")
         return
@@ -204,11 +216,27 @@ def delete_deal(notification: Notification) -> None:
 
 
 @bot.router.message(
-    state=States.OPEN_SHIFT_AMOUNT.value,
+    state=AdminFullReportStates.CUSTOM_RANGE.value,
+    type_message=TEXT_TYPES,
+)
+def full_report_custom(notification: Notification) -> None:
+    """FSM: полный отчёт по произвольному диапазону."""
+    if not is_authorized_admin(notification.sender):
+        notification.answer("Недостаточно прав для выполнения команды.")
+        return
+    admin_full_report_custom(notification)
+
+
+@bot.router.message(
+    state=States.OPEN_SHIFT_CASH.value,
+    type_message=TEXT_TYPES,
+)
+@bot.router.message(
+    state=States.OPEN_SHIFT_BANK.value,
     type_message=TEXT_TYPES,
 )
 def open_shift(notification: Notification) -> None:
-    """FSM: ввод суммы при открытии смены (worker)."""
+    """FSM: ввод сумм при открытии смены (worker)."""
     open_shift_step(notification)
 
 
@@ -217,7 +245,7 @@ def open_shift(notification: Notification) -> None:
     type_message=TEXT_TYPES,
 )
 def deal_handler(notification: Notification) -> None:
-    """FSM: ввод суммы сделки и комментария."""
+    """FSM: ввод суммы операции и комментария."""
     deal_steps(notification)
 
 
@@ -226,8 +254,29 @@ def deal_handler(notification: Notification) -> None:
     type_message=TEXT_TYPES,
 )
 def deal_payment_handler(notification: Notification) -> None:
-    """FSM: выбор способа оплаты сделки."""
+    """FSM: выбор способа оплаты операции."""
     deal_steps(notification)
+
+
+@bot.router.message(
+    state=States.INSTALLMENT_PRICE.value,
+    type_message=TEXT_TYPES,
+)
+@bot.router.message(
+    state=States.INSTALLMENT_PERCENT.value,
+    type_message=TEXT_TYPES,
+)
+@bot.router.message(
+    state=States.INSTALLMENT_TERM.value,
+    type_message=TEXT_TYPES,
+)
+@bot.router.message(
+    state=States.INSTALLMENT_PAYMENT_METHOD.value,
+    type_message=TEXT_TYPES,
+)
+def installment_handler(notification: Notification) -> None:
+    """FSM: сбор данных для рассрочки."""
+    installment_steps(notification)
 
 
 @bot.router.message(
@@ -235,7 +284,7 @@ def deal_payment_handler(notification: Notification) -> None:
     type_message=TEXT_TYPES,
 )
 def deal_details_handler(notification: Notification) -> None:
-    """FSM: ввод ID сделки из списка."""
+    """FSM: ввод ID операции из списка."""
     deal_details_step(notification)
 
 

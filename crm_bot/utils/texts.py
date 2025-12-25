@@ -7,12 +7,12 @@ from typing import Iterable
 # from .utils import format_money
 
 # CANCEL_MESSAGE = "Действие отменено. Возвращаю вас в меню."
-# EMPTY_DEALS_MESSAGE = "Сделок пока нет. Создайте первую сделку через меню."
+# EMPTY_DEALS_MESSAGE = "Операций пока нет. Создайте первую операцию через меню."
 # ASK_CLIENT_NAME = "Напиши имя клиента"
 # ASK_CLIENT_PHONE = "Укажи телефон клиента"
-# ASK_DEAL_AMOUNT = "Сумма сделки в рублях?"
+# ASK_DEAL_AMOUNT = "Сумма операции в рублях?"
 # ASK_DEAL_TERM = "За какой срок рассрочка (в месяцах)?"
-# PAYMENT_SELECT_PROMPT = "Выберите сделку для оплаты"
+# PAYMENT_SELECT_PROMPT = "Выберите операцию для оплаты"
 # PAYMENT_AMOUNT_PROMPT = "Укажи сумму платежа в рублях"
 # FALLBACK_MESSAGE = "Привет! Чтобы начать, выбери действие в меню."
 # ADD_MEMBER_USAGE = (
@@ -22,9 +22,9 @@ from typing import Iterable
 
 
 # def deal_saved_text(summary: DealSummary) -> str:
-#     """Составляет итоговое сообщение после сохранения сделки."""
+#     """Составляет итоговое сообщение после сохранения операции."""
 #     return (
-#         "Сделка сохранена:\n"
+#         "Операция сохранена:\n"
 #         f"#{summary.id} {summary.client}\n"
 #         f"Сумма: {format_money(summary.total_amount)}\n"
 #         f"Платежей: {format_money(summary.paid)}\n"
@@ -36,7 +36,7 @@ from typing import Iterable
 # def payment_saved_text(amount: Decimal, summary: DealSummary) -> str:
 #     """Генерирует уведомление о приёме платежа."""
 #     return (
-#         f"Платёж {format_money(amount)} за сделку #{summary.id} принят.\n"
+#         f"Платёж {format_money(amount)} за операцию #{summary.id} принят.\n"
 #         f"Оплачено {format_money(summary.paid)} из {format_money(summary.total_amount)}\n"
 #         f"Остаток: {format_money(summary.debt)}\n"
 #         f"Статус: {summary.status}"
@@ -44,14 +44,14 @@ from typing import Iterable
 
 
 # def my_deals_text(deals: Iterable[DealSummary]) -> str:
-#     """Собирает краткий список сделок для пользователя."""
+#     """Собирает краткий список операций для пользователя."""
 #     if not deals:
 #         return EMPTY_DEALS_MESSAGE
 #     lines = [
 #         f"#{item.id} {item.client} — {item.status} (долг {format_money(item.debt)})"
 #         for item in deals
 #     ]
-#     return "Последние сделки:\n" + "\n".join(lines)
+#     return "Последние операции:\n" + "\n".join(lines)
 
 
 # def analytics_text(stats: dict[str, Decimal]) -> str:

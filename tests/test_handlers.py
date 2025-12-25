@@ -17,6 +17,7 @@ from crm_bot.states.admin import (
     AdminAdjustBalanceStates,
     AdminDeleteDealStates,
     AdminAnalyticsStates,
+    AdminFullReportStates,
 )
 from crm_bot.states.states import States
 
@@ -97,11 +98,15 @@ def test_worker_open_shift_pipeline(session, worker_user):
     notification = FakeNotification(sender=worker_user.phone, state_manager=state_manager)
 
     manage_handlers.worker_buttons_handler(notification, "Открыть смену")
-    assert state_manager.get_state(worker_user.phone) == States.OPEN_SHIFT_AMOUNT.value
+    assert state_manager.get_state(worker_user.phone) == States.OPEN_SHIFT_CASH.value
 
     notification.set_message_text("150")
     manage_handlers.open_shift_step(notification)
-    assert notification.answers[-1] == "✅ Смена открыта. Можно создавать сделки."
+    assert state_manager.get_state(worker_user.phone) == States.OPEN_SHIFT_BANK.value
+
+    notification.set_message_text("50")
+    manage_handlers.open_shift_step(notification)
+    assert notification.answers[-1] == "✅ Смена открыта. Можно создавать операции."
 
     session.expire_all()
     shift = (
@@ -109,19 +114,20 @@ def test_worker_open_shift_pipeline(session, worker_user):
         .filter(Shift.worker_id == worker_user.id, Shift.status == ShiftStatus.OPEN)
         .one()
     )
-    assert shift.opening_balance == Decimal("150")
-    assert shift.current_balance == Decimal("150")
+    assert shift.opening_balance_cash == Decimal("150")
+    assert shift.opening_balance_bank == Decimal("50")
+    assert shift.current_balance == Decimal("200")
 
 
 @pytest.mark.usefixtures("keyboard_spy")
 def test_worker_deal_pipeline(session, worker_user):
-    """Сотрудник: создание сделки через цепочку FSM."""
-    shift_service.open_shift(worker_user, 300, session=session)
+    """Сотрудник: создание операции через цепочку FSM."""
+    shift_service.open_shift(worker_user, 300, 0, session=session)
 
     state_manager = DummyStateManager()
     notification = FakeNotification(sender=worker_user.phone, state_manager=state_manager)
 
-    manage_handlers.worker_buttons_handler(notification, "Новая сделка")
+    manage_handlers.worker_buttons_handler(notification, "Финансовая операция")
     assert state_manager.get_state(worker_user.phone) == States.DEAL_AMOUNT.value
 
     notification.set_message_text("+120 Продажа")
@@ -130,7 +136,7 @@ def test_worker_deal_pipeline(session, worker_user):
 
     notification.set_message_text("Наличка")
     manage_handlers.deal_steps(notification)
-    assert "Сделка #" in notification.answers[-1]
+    assert "Операция #" in notification.answers[-1]
 
     session.expire_all()
     deal = session.query(Deal).one()
@@ -141,18 +147,13 @@ def test_worker_deal_pipeline(session, worker_user):
 
 @pytest.mark.usefixtures("keyboard_spy")
 def test_worker_balance_and_deals_menu(session, worker_user):
-    """Сотрудник: просмотр баланса и последних сделок из меню."""
-    # Открываем смену через FSM
-    sm_open = DummyStateManager()
-    notif_open = FakeNotification(worker_user.phone, state_manager=sm_open)
-    manage_handlers.worker_buttons_handler(notif_open, "Открыть смену")
-    notif_open.set_message_text("400")
-    manage_handlers.open_shift_step(notif_open)
+    """Сотрудник: просмотр баланса и последних операций из меню."""
+    shift_service.open_shift(worker_user, 400, 0, session=session)
 
-    # Создаём сделку через FSM
+    # Создаём операцию через FSM
     sm_deal = DummyStateManager()
     notif_deal = FakeNotification(worker_user.phone, state_manager=sm_deal)
-    manage_handlers.worker_buttons_handler(notif_deal, "Новая сделка")
+    manage_handlers.worker_buttons_handler(notif_deal, "Финансовая операция")
     notif_deal.set_message_text("+150 Тест")
     manage_handlers.deal_steps(notif_deal)
     notif_deal.set_message_text("Банк")
@@ -160,16 +161,16 @@ def test_worker_balance_and_deals_menu(session, worker_user):
 
     notification = FakeNotification(sender=worker_user.phone, state_manager=DummyStateManager())
     manage_handlers.worker_buttons_handler(notification, "Мой баланс")
-    assert "Текущий лимит" in notification.answers[-1]
+    assert "Баланс смены" in notification.answers[-1]
 
-    manage_handlers.worker_buttons_handler(notification, "Мои сделки")
-    assert any("Последние сделки" in msg for msg in notification.answers)
+    manage_handlers.worker_buttons_handler(notification, "Мои операции")
+    assert any("Последние операции" in msg for msg in notification.answers)
 
 
 @pytest.mark.usefixtures("keyboard_spy")
 def test_admin_adjust_balance_flow(session, admin_user, worker_user):
     """Админ: корректировка баланса через два шага FSM."""
-    shift_service.open_shift(worker_user, 200, session=session)
+    shift_service.open_shift(worker_user, 200, 0, session=session)
     session.commit()
 
     state_manager = DummyStateManager()
@@ -180,6 +181,10 @@ def test_admin_adjust_balance_flow(session, admin_user, worker_user):
 
     notification.set_message_text(worker_user.phone)
     admin_handlers.admin_adjust_balance(notification)
+    assert state_manager.get_state(admin_user.phone) == AdminAdjustBalanceStates.BALANCE_KIND.value
+
+    notification.set_message_text("Наличка")
+    admin_handlers.admin_adjust_balance(notification)
     assert state_manager.get_state(admin_user.phone) == AdminAdjustBalanceStates.DELTA.value
 
     notification.set_message_text("-50")
@@ -188,25 +193,25 @@ def test_admin_adjust_balance_flow(session, admin_user, worker_user):
 
     session.expire_all()
     shift = shift_service.get_active_shift(worker_user.id, session=session)
-    assert shift.current_balance == Decimal("150")
+    assert shift.current_balance_cash == Decimal("150")
 
 
 @pytest.mark.usefixtures("keyboard_spy")
 def test_admin_delete_deal_flow(session, admin_user, worker_user):
-    """Админ: удаление конкретной сделки."""
-    shift = shift_service.open_shift(worker_user, 300, session=session)
+    """Админ: удаление конкретной операции."""
+    shift = shift_service.open_shift(worker_user, 300, 0, session=session)
     deal = deal_service.create_deal(worker_user, "Удалить", None, 120, session=session)
     session.commit()
 
     state_manager = DummyStateManager()
     notification = FakeNotification(admin_user.phone, state_manager=state_manager)
 
-    admin_handlers.admin_buttons_handler(notification, "Удалить сделку")
+    admin_handlers.admin_buttons_handler(notification, "Удалить операцию")
     assert state_manager.get_state(admin_user.phone) == AdminDeleteDealStates.DEAL_ID.value
 
     notification.set_message_text(str(deal.id))
     admin_handlers.admin_delete_deal(notification)
-    assert f"Сделка #{deal.id} помечена как удалённая." in notification.answers[-1]
+    assert f"Операция #{deal.id} помечена как удалённая." in notification.answers[-1]
 
     session.refresh(deal)
     assert deal.is_deleted is True
@@ -215,7 +220,7 @@ def test_admin_delete_deal_flow(session, admin_user, worker_user):
 @pytest.mark.usefixtures("keyboard_spy")
 def test_admin_report_flow(session, admin_user, worker_user):
     """Админ: построение отчёта по периоду и сотруднику."""
-    shift_service.open_shift(worker_user, 500, session=session)
+    shift_service.open_shift(worker_user, 500, 0, session=session)
     deal_service.create_deal(worker_user, "Клиент1", None, 200, session=session)
     deal_service.create_deal(worker_user, "Клиент2", None, 100, session=session)
     session.commit()
@@ -228,8 +233,59 @@ def test_admin_report_flow(session, admin_user, worker_user):
 
     notification.set_message_text(f"2025-01-01 2025-12-31 {worker_user.phone}")
     admin_handlers.admin_manager_report(notification)
-    assert "Всего сделок: 2" in notification.answers[-1]
+    assert "Всего операций: 2" in notification.answers[-1]
     assert "💸 Выдачи" in notification.answers[-1]
+
+
+@pytest.mark.usefixtures("keyboard_spy")
+def test_admin_full_report_menu_sends_buttons(admin_user):
+    state_manager = DummyStateManager()
+    notification = FakeNotification(admin_user.phone, state_manager=state_manager)
+
+    admin_handlers.admin_buttons_handler(notification, "Полный отчёт")
+    assert state_manager.get_state(admin_user.phone) is None
+
+
+def test_admin_full_report_choice_period(session, admin_user):
+    state_manager = DummyStateManager()
+    notification = FakeNotification(admin_user.phone, state_manager=state_manager)
+
+    admin_handlers.handle_full_report_choice(notification, "Период")
+    assert state_manager.get_state(admin_user.phone) == AdminFullReportStates.CUSTOM_RANGE.value
+
+
+def test_admin_full_report_choice_quick(monkeypatch, admin_user):
+    captured = {}
+
+    def fake_report(start, end, session=None):
+        captured["start"] = start
+        captured["end"] = end
+        return "FULL REPORT"
+
+    monkeypatch.setattr(admin_handlers.admin_service, "build_full_report", fake_report)
+
+    notification = FakeNotification(admin_user.phone)
+    admin_handlers.handle_full_report_choice(notification, "За день")
+
+    assert "FULL REPORT" in notification.answers[-1]
+    assert captured["start"] == captured["end"]
+
+
+def test_admin_full_report_custom_flow(monkeypatch, admin_user):
+    monkeypatch.setattr(
+        admin_handlers.admin_service,
+        "build_full_report",
+        lambda start, end, session=None: f"FULL {start} {end}",
+    )
+    state_manager = DummyStateManager()
+    notification = FakeNotification(admin_user.phone, state_manager=state_manager)
+    state_manager.set_state(admin_user.phone, AdminFullReportStates.CUSTOM_RANGE.value)
+    notification.set_message_text("2025-01-01 2025-01-31")
+
+    admin_handlers.admin_full_report_custom(notification)
+
+    assert "FULL 2025-01-01 2025-01-31" in notification.answers[-1]
+    assert state_manager.get_state(admin_user.phone) is None
 
 
 def test_menu_handler_routes_to_admin(monkeypatch, admin_user):
