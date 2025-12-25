@@ -25,6 +25,11 @@ WORKER_MENU_BUTTONS = [
 ]
 
 WORKER_MENU_HINT = "ℹ️ Чтобы вернуться в меню сотрудника, напишите `Менеджер`."
+DEAL_START_PROMPT = (
+    "💰 Введите сумму: `+` — пополнение, `-` — списание. Добавьте комментарий в той же строке.\n"
+    "Пример: `+120000 Предоплата` или `-5000 Закуп`."
+)
+INSTALLMENT_START_PROMPT = "Введите цену товара (руб)."
 
 
 def _with_worker_hint(text: str) -> str:
@@ -38,6 +43,22 @@ PAYMENT_CHOICES = {
     "безнал": DealPaymentMethod.BANK,
     "bank": DealPaymentMethod.BANK,
 }
+
+
+def _start_deal_flow(notification: Notification) -> None:
+    notification.state_manager.set_state(
+        notification.sender,
+        States.DEAL_AMOUNT.value,
+    )
+    notification.answer(_with_worker_hint(DEAL_START_PROMPT))
+
+
+def _start_installment_flow(notification: Notification) -> None:
+    notification.state_manager.set_state(
+        notification.sender,
+        States.INSTALLMENT_PRICE.value,
+    )
+    notification.answer(_with_worker_hint(INSTALLMENT_START_PROMPT))
 
 
 def manage_menu_handler(notification: Notification) -> None:
@@ -63,22 +84,9 @@ def worker_buttons_handler(notification: Notification, txt: str) -> None:
         case "Закрыть смену":
             _close_shift(notification, worker)
         case "Финансовая операция":
-            notification.state_manager.set_state(
-                notification.sender,
-                States.DEAL_AMOUNT.value,
-            )
-            notification.answer(
-                _with_worker_hint(
-                    "💰 Введите сумму: `+` — пополнение, `-` — списание. Добавьте комментарий в той же строке.\n"
-                    "Пример: `+120000 Предоплата` или `-5000 Закуп`."
-                )
-            )
+            _start_deal_flow(notification)
         case "Выдача рассрочки":
-            notification.state_manager.set_state(
-                notification.sender,
-                States.INSTALLMENT_PRICE.value,
-            )
-            notification.answer(_with_worker_hint("Введите цену товара (руб)."))
+            _start_installment_flow(notification)
         case "Мой баланс":
             _send_balance(notification)
         case "Мои операции":
@@ -242,9 +250,6 @@ def deal_steps(notification: Notification) -> None:
         except Exception as exc:  # noqa: BLE001
             notification.answer(str(exc))
             return
-        finally:
-            notification.state_manager.delete_state(notification.sender)
-
         message = (
             f"✅ Операция #{deal.id} сохранена.\n"
             f"Сумма: {format_amount(deal.total_amount)}\n"
@@ -253,8 +258,10 @@ def deal_steps(notification: Notification) -> None:
         )
         if balance_after is not None:
             message += f"\n💼 Баланс: {format_amount(balance_after)}"
-        message += f"\n\n{WORKER_MENU_HINT}"
+        message += "\n\nГотов записать следующую операцию. Если хотите выйти, напишите `Менеджер`."
         notification.answer(message)
+        notification.state_manager.delete_state(notification.sender)
+        _start_deal_flow(notification)
 
 
 def installment_steps(notification: Notification) -> None:
@@ -353,9 +360,6 @@ def installment_steps(notification: Notification) -> None:
         except Exception as exc:  # noqa: BLE001
             notification.answer(str(exc))
             return
-        finally:
-            notification.state_manager.delete_state(notification.sender)
-
         notification.answer(
             "✅ Рассрочка зафиксирована.\n"
             f"ID операции: #{deal.id}\n"
@@ -364,8 +368,10 @@ def installment_steps(notification: Notification) -> None:
             f"Первый взнос: {format_amount(down_payment)}\n"
             f"Сумма рассрочки: {format_amount(total)}\n"
             f"Ежемесячный платёж: {format_amount(monthly)}\n\n"
-            f"{WORKER_MENU_HINT}"
+            "Готов оформить следующую рассрочку. Если хотите выйти, напишите `Менеджер`."
         )
+        notification.state_manager.delete_state(notification.sender)
+        _start_installment_flow(notification)
 def _send_balance(notification: Notification) -> None:
     try:
         user = user_service.get_active_user_by_phone(notification.sender)
@@ -473,7 +479,7 @@ def deal_details_step(notification: Notification) -> None:
         notification.answer(str(exc))
 
 
-AMOUNT_PATTERN = re.compile(r"^\s*([+-]?\s*\d+(?:[.,]\d+)?)\s*(.*)$")
+AMOUNT_PATTERN = re.compile(r"^\s*([+-]\s*\d+(?:[.,]\d+)?)\s*(.*)$")
 
 
 def _resolve_opening_input(raw: str, suggested: str | None) -> Decimal:

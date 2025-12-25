@@ -136,7 +136,9 @@ def test_worker_deal_pipeline(session, worker_user):
 
     notification.set_message_text("Наличка")
     manage_handlers.deal_steps(notification)
-    assert "Операция #" in notification.answers[-1]
+    # После выполнения бот отправляет итог и сразу снова ждёт сумму
+    assert "Операция #" in notification.answers[-2]
+    assert state_manager.get_state(worker_user.phone) == States.DEAL_AMOUNT.value
 
     session.expire_all()
     deal = session.query(Deal).one()
