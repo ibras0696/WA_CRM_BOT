@@ -1,5 +1,7 @@
 import logging
 
+from apscheduler.schedulers.background import BackgroundScheduler
+from apscheduler.triggers.cron import CronTrigger
 from whatsapp_chatbot_python import GreenAPIBot, Notification
 from whatsapp_chatbot_python.filters import TEXT_TYPES
 
@@ -36,6 +38,7 @@ from crm_bot.states.admin import (
 )
 from crm_bot.states.states import States
 from crm_bot.utils.auth import is_authorized_admin
+from crm_bot.services import shifts as shift_service
 
 logging.basicConfig(
     level=logging.DEBUG if settings.bot_debug else logging.INFO,
@@ -55,6 +58,33 @@ BUTTON_PAYLOAD_KEYS = (
     "buttonsResponseMessage",
     "templateButtonsReplyMessage",
 )
+SHIFT_SCHEDULER: BackgroundScheduler | None = None
+
+
+def _close_shifts_job() -> None:
+    try:
+        closed = shift_service.close_open_shifts()
+        logger.info("Auto-closed shifts at midnight: %s", closed)
+    except Exception:  # noqa: BLE001
+        logger.exception("Failed to auto-close shifts job")
+
+
+def start_shift_scheduler() -> BackgroundScheduler:
+    """Запускает ежедневное закрытие смен (00:00 Europe/Moscow)."""
+    global SHIFT_SCHEDULER  # noqa: PLW0603
+    if SHIFT_SCHEDULER:
+        return SHIFT_SCHEDULER
+    scheduler = BackgroundScheduler(timezone=shift_service.MOSCOW_TZ)
+    scheduler.add_job(
+        _close_shifts_job,
+        CronTrigger(hour=0, minute=0, timezone=shift_service.MOSCOW_TZ),
+        name="close_shifts_midnight",
+        replace_existing=True,
+    )
+    scheduler.start()
+    SHIFT_SCHEDULER = scheduler
+    logger.info("Shift scheduler started (00:00 Europe/Moscow)")
+    return scheduler
 
 def _get_button_payload(notification: Notification) -> dict:
     message_data = notification.event.get("messageData", {}) or {}
@@ -285,6 +315,10 @@ def deal_payment_handler(notification: Notification) -> None:
     type_message=TEXT_TYPES,
 )
 @bot.router.message(
+    state=States.INSTALLMENT_DOWN_PAYMENT.value,
+    type_message=TEXT_TYPES,
+)
+@bot.router.message(
     state=States.INSTALLMENT_PAYMENT_METHOD.value,
     type_message=TEXT_TYPES,
 )
@@ -333,4 +367,13 @@ def outgoing_base_menu_handler(notification: Notification) -> None:
 
 
 if __name__ == "__main__":
-    bot.run_forever()
+    scheduler = None
+    try:
+        scheduler = start_shift_scheduler()
+    except Exception:  # noqa: BLE001
+        logger.exception("Failed to start shift scheduler")
+    try:
+        bot.run_forever()
+    finally:
+        if scheduler:
+            scheduler.shutdown(wait=False)

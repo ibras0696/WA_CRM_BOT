@@ -4,3 +4,6 @@ alembic
 pytest
 python-dotenv
 psycopg[binary]
+pandas
+matplotlib
+apscheduler

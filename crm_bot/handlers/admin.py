@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import os
 from datetime import date, datetime
 
 from whatsapp_chatbot_python import Notification
@@ -68,6 +69,22 @@ def _send_full_report_menu(notification: Notification) -> None:
         header="Выберите период",
         buttons=FULL_REPORT_BUTTONS,
     )
+
+
+def _deliver_full_report(notification: Notification, start: date, end: date) -> None:
+    text, image_path = admin_service.build_full_report_bundle(start, end)
+    notification.answer(text)
+    if not image_path:
+        return
+    try:
+        notification.answer_with_file(image_path, caption="📊 Табличный отчёт")
+    except Exception:  # noqa: BLE001
+        logging.exception("failed to send full report image")
+    finally:
+        try:
+            os.remove(image_path)
+        except OSError:
+            logging.warning("failed to delete temp report %s", image_path)
 
 
 def admin_buttons_handler(notification: Notification, txt: str) -> None:
@@ -302,8 +319,7 @@ def handle_full_report_choice(notification: Notification, choice: str) -> None:
         return
 
     try:
-        report = admin_service.build_full_report(start, end)
-        notification.answer(report)
+        _deliver_full_report(notification, start, end)
     except Exception as exc:  # noqa: BLE001
         notification.answer(str(exc))
 
@@ -333,8 +349,7 @@ def admin_full_report_custom(notification: Notification) -> None:
         return
 
     try:
-        report = admin_service.build_full_report(start_date, end_date)
-        notification.answer(report)
+        _deliver_full_report(notification, start_date, end_date)
     except Exception as exc:  # noqa: BLE001
         notification.answer(str(exc))
     finally:

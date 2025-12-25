@@ -1,6 +1,6 @@
 import logging
 import re
-from decimal import Decimal, ROUND_HALF_UP
+from decimal import Decimal, ROUND_HALF_UP, DecimalException
 
 from whatsapp_chatbot_python import Notification
 
@@ -26,10 +26,12 @@ WORKER_MENU_BUTTONS = [
 
 WORKER_MENU_HINT = "ℹ️ Чтобы вернуться в меню сотрудника, напишите `Менеджер`."
 DEAL_START_PROMPT = (
-    "💰 Введите сумму: `+` — пополнение, `-` — списание. Добавьте комментарий в той же строке.\n"
+    "💰 Введите сумму: `+`  пополнение, `-`  списание. Добавьте комментарий в той же строке.\n"
     "Пример: `+120000 Предоплата` или `-5000 Закуп`."
 )
 INSTALLMENT_START_PROMPT = "Введите цену товара (руб)."
+PAYMENT_METHOD_PROMPT = "💳 Укажите способ: ⁠ *Наличка*⁠ или ⁠ *Банк*⁠."
+PAYMENT_METHOD_RETRY = "💳 Напишите одним словом: ⁠ `Наличка`⁠ или ⁠ `Банк`⁠."
 
 
 def _with_worker_hint(text: str) -> str:
@@ -46,6 +48,13 @@ PAYMENT_CHOICES = {
 
 
 def _start_deal_flow(notification: Notification) -> None:
+    worker = user_service.get_active_user_by_phone(notification.sender)
+    if not worker:
+        notification.answer("Нет доступа. Доступ выдаёт администратор.")
+        return
+    if not shift_service.get_active_shift(worker.id):
+        notification.answer("Смена не открыта. Откройте смену, чтобы провести операцию.")
+        return
     notification.state_manager.set_state(
         notification.sender,
         States.DEAL_AMOUNT.value,
@@ -54,6 +63,13 @@ def _start_deal_flow(notification: Notification) -> None:
 
 
 def _start_installment_flow(notification: Notification) -> None:
+    worker = user_service.get_active_user_by_phone(notification.sender)
+    if not worker:
+        notification.answer("Нет доступа. Доступ выдаёт администратор.")
+        return
+    if not shift_service.get_active_shift(worker.id):
+        notification.answer("Смена не открыта. Откройте смену, чтобы оформить рассрочку.")
+        return
     notification.state_manager.set_state(
         notification.sender,
         States.INSTALLMENT_PRICE.value,
@@ -82,7 +98,7 @@ def _start_close_shift(notification: Notification, worker) -> None:
     notification.answer(
         _with_worker_hint(
             "Сверка смены.\n"
-            f"В системе по наличке: {format_amount(expected_cash)}.\n"
+            f"В системе по `наличке`: {format_amount(expected_cash)}.\n"
             "Введите фактический остаток наличных."
         )
     )
@@ -145,7 +161,7 @@ def _start_open_shift(notification: Notification, worker) -> None:
     cash_hint = f"Вчерашний остаток: {suggested_cash}" if suggested_cash else "Если остатка нет, введите 0."
     notification.answer(
         _with_worker_hint(
-            "Укажите стартовый лимит по наличке.\n"
+            "Укажите стартовый лимит по `наличке`.\n"
             f"{cash_hint}\n"
             "Можно отправить `+`, чтобы принять остаток."
         )
@@ -181,7 +197,7 @@ def open_shift_step(notification: Notification) -> None:
         )
         notification.answer(
             _with_worker_hint(
-                "Теперь укажите стартовый лимит по безналу.\n"
+                "Теперь укажите стартовый лимит по `безналу`.\n"
                 f"{bank_hint}\n"
                 "Можно отправить `+`, чтобы принять остаток."
             )
@@ -233,7 +249,7 @@ def close_shift_step(notification: Notification) -> None:
         switch_state(notification, States.CLOSE_SHIFT_BANK.value)
         notification.answer(
             _with_worker_hint(
-                f"В системе по безналу: {format_amount(Decimal(data.get('expected_bank') or '0'))}.\n"
+                f"В системе по `безналу`: {format_amount(Decimal(data.get('expected_bank') or '0'))}.\n"
                 "Введите фактический остаток по банку."
             )
         )
@@ -302,7 +318,7 @@ def deal_steps(notification: Notification) -> None:
             {"amount": amount, "comment": comment},
         )
         switch_state(notification, States.DEAL_PAYMENT_METHOD.value)
-        notification.answer(_with_worker_hint("Укажите способ: Наличка или Банк."))
+        notification.answer(_with_worker_hint(PAYMENT_METHOD_PROMPT))
         return
 
     if state_name == States.DEAL_PAYMENT_METHOD.value:
@@ -311,7 +327,7 @@ def deal_steps(notification: Notification) -> None:
             return
         method = _parse_payment_method(text)
         if not method:
-            notification.answer(_with_worker_hint("Напишите `Наличка` или `Банк`."))
+            notification.answer(_with_worker_hint(PAYMENT_METHOD_RETRY))
             return
         data = notification.state_manager.get_state_data(notification.sender) or {}
         amount = data.get("amount")
@@ -387,6 +403,9 @@ def installment_steps(notification: Notification) -> None:
         except ValueError as exc:
             notification.answer(str(exc))
             return
+        if percent < 1 or percent > 100:
+            notification.answer(_with_worker_hint("Процент наценки должен быть от 1 до 100."))
+            return
         notification.state_manager.update_state_data(
             notification.sender,
             {"installment_percent": str(percent)},
@@ -401,31 +420,68 @@ def installment_steps(notification: Notification) -> None:
         except ValueError as exc:
             notification.answer(str(exc))
             return
+        if term < 1 or term > 120:
+            notification.answer(_with_worker_hint("Срок может быть от 1 до 120 месяцев (до 10 лет)."))
+            return
         notification.state_manager.update_state_data(
             notification.sender,
             {"installment_term": str(term)},
         )
+        try:
+            _, _, _, total = _calc_installment_total(data)
+        except ValueError as exc:
+            notification.answer(str(exc))
+            notification.state_manager.delete_state(notification.sender)
+            return
+        switch_state(notification, States.INSTALLMENT_DOWN_PAYMENT.value)
+        notification.answer(
+            _with_worker_hint(
+                "Введите сумму первоначального взноса (можно 0).\n"
+                f"Макс: {format_amount(total)}."
+            )
+        )
+        return
+
+    if state_name == States.INSTALLMENT_DOWN_PAYMENT.value:
+        try:
+            down_payment = _parse_non_negative_decimal(text)
+        except ValueError as exc:
+            notification.answer(str(exc))
+            return
+        try:
+            price, percent, markup, total = _calc_installment_total(data)
+            term = int(data.get("installment_term"))
+        except Exception:  # noqa: BLE001
+            notification.answer("Данные рассрочки повреждены, начните заново.")
+            notification.state_manager.delete_state(notification.sender)
+            return
+        if down_payment > total:
+            notification.answer(_with_worker_hint(f"Первоначальный взнос не может превышать {format_amount(total)}."))
+            return
+        notification.state_manager.update_state_data(
+            notification.sender,
+            {"installment_down_payment": str(down_payment)},
+        )
         switch_state(notification, States.INSTALLMENT_PAYMENT_METHOD.value)
         notification.answer(
-            _with_worker_hint("Выберите способ оплаты первого взноса: Наличка или Банк.")
+            _with_worker_hint("💳 Укажите способ оплаты первого взноса: ⁠ *Наличка*⁠ или ⁠ *Банк*⁠.")
         )
         return
 
     if state_name == States.INSTALLMENT_PAYMENT_METHOD.value:
         method = _parse_payment_method(text)
         if not method:
-            notification.answer(_with_worker_hint("Напишите `Наличка` или `Банк`."))
+            notification.answer(_with_worker_hint(PAYMENT_METHOD_RETRY))
             return
         try:
             user = user_service.get_active_user_by_phone(notification.sender)
             if not user:
                 raise Exception("Нет доступа. Обратитесь к админу.")
-            price = Decimal(data.get("installment_price"))
-            percent = Decimal(data.get("installment_percent"))
+            price, percent, markup, total = _calc_installment_total(data)
             term = int(data.get("installment_term"))
-            markup = (price * percent) / Decimal("100")
-            total = price + markup
-            down_payment = markup
+            down_payment = Decimal(data.get("installment_down_payment") or "0")
+            if down_payment > total:
+                raise ValueError("Первоначальный взнос превышает сумму рассрочки.")
             remaining = total - down_payment
             monthly = (remaining / term if term else remaining).quantize(
                 Decimal("1"), rounding=ROUND_HALF_UP
@@ -636,3 +692,12 @@ def _parse_non_negative_decimal(raw: str) -> Decimal:
     if value < 0:
         raise ValueError("Сумма не может быть отрицательной.")
     return value
+def _calc_installment_total(data: dict) -> tuple[Decimal, Decimal, Decimal, Decimal]:
+    try:
+        price = Decimal(str(data["installment_price"]))
+        percent = Decimal(str(data["installment_percent"]))
+    except (KeyError, TypeError, DecimalException):
+        raise ValueError("Данные рассрочки повреждены, начните заново.")
+    markup = (price * percent) / Decimal("100")
+    total = price + markup
+    return price, percent, markup, total

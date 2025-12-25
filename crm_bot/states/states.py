@@ -16,4 +16,5 @@ class States(BaseStates):
     INSTALLMENT_PRICE = "installment:price"
     INSTALLMENT_PERCENT = "installment:percent"
     INSTALLMENT_TERM = "installment:term"
+    INSTALLMENT_DOWN_PAYMENT = "installment:down_payment"
     INSTALLMENT_PAYMENT_METHOD = "installment:payment_method"

@@ -56,6 +56,7 @@ class FakeNotification:
         self._text = text
         self.state_manager = state_manager or DummyStateManager()
         self.answers: list[str] = []
+        self.files: list[dict] = []
         self.event: dict = {}
 
     def set_message_text(self, text: str) -> None:
@@ -66,6 +67,15 @@ class FakeNotification:
 
     def answer(self, text: str) -> None:
         self.answers.append(text)
+
+    def answer_with_file(self, file: str, file_name=None, caption=None, quoted_message_id=None):
+        self.files.append(
+            {
+                "file": file,
+                "file_name": file_name,
+                "caption": caption,
+            }
+        )
 
 
 @pytest.mark.usefixtures("keyboard_spy")
@@ -148,6 +158,28 @@ def test_worker_deal_pipeline(session, worker_user):
 
 
 @pytest.mark.usefixtures("keyboard_spy")
+def test_worker_deal_requires_open_shift(worker_user):
+    state_manager = DummyStateManager()
+    notification = FakeNotification(sender=worker_user.phone, state_manager=state_manager)
+
+    manage_handlers.worker_buttons_handler(notification, "Финансовая операция")
+
+    assert "Смена не открыта" in notification.answers[-1]
+    assert state_manager.get_state(worker_user.phone) is None
+
+
+@pytest.mark.usefixtures("keyboard_spy")
+def test_worker_installment_requires_open_shift(worker_user):
+    state_manager = DummyStateManager()
+    notification = FakeNotification(sender=worker_user.phone, state_manager=state_manager)
+
+    manage_handlers.worker_buttons_handler(notification, "Выдача рассрочки")
+
+    assert "Смена не открыта" in notification.answers[-1]
+    assert state_manager.get_state(worker_user.phone) is None
+
+
+@pytest.mark.usefixtures("keyboard_spy")
 def test_worker_close_shift_with_reconciliation(session, worker_user):
     """Сотрудник: сверка и закрытие смены."""
     shift = shift_service.open_shift(worker_user, 200, 100, session=session)
@@ -194,6 +226,57 @@ def test_worker_balance_and_deals_menu(session, worker_user):
 
     manage_handlers.worker_buttons_handler(notification, "Мои операции")
     assert any("Последние операции" in msg for msg in notification.answers)
+
+
+@pytest.mark.usefixtures("keyboard_spy")
+def test_installment_percent_validation(worker_user):
+    state_manager = DummyStateManager()
+    notification = FakeNotification(worker_user.phone, state_manager=state_manager)
+    state_manager.set_state(worker_user.phone, States.INSTALLMENT_PERCENT.value)
+    state_manager.update_state_data(
+        worker_user.phone,
+        {"installment_price": "100000"},
+    )
+
+    notification.set_message_text("150")
+    manage_handlers.installment_steps(notification)
+
+    assert "Процент наценки должен быть от 1 до 100." in notification.answers[-1]
+    assert state_manager.get_state(worker_user.phone) == States.INSTALLMENT_PERCENT.value
+
+
+@pytest.mark.usefixtures("keyboard_spy")
+def test_installment_term_validation(worker_user):
+    state_manager = DummyStateManager()
+    notification = FakeNotification(worker_user.phone, state_manager=state_manager)
+    state_manager.set_state(worker_user.phone, States.INSTALLMENT_TERM.value)
+    state_manager.update_state_data(
+        worker_user.phone,
+        {"installment_price": "100000", "installment_percent": "20"},
+    )
+
+    notification.set_message_text("200")
+    manage_handlers.installment_steps(notification)
+
+    assert "Срок может быть от 1 до 120 месяцев" in notification.answers[-1]
+    assert state_manager.get_state(worker_user.phone) == States.INSTALLMENT_TERM.value
+
+
+@pytest.mark.usefixtures("keyboard_spy")
+def test_installment_down_payment_validation(worker_user):
+    state_manager = DummyStateManager()
+    notification = FakeNotification(worker_user.phone, state_manager=state_manager)
+    state_manager.set_state(worker_user.phone, States.INSTALLMENT_DOWN_PAYMENT.value)
+    state_manager.update_state_data(
+        worker_user.phone,
+        {"installment_price": "100000", "installment_percent": "20", "installment_term": "6"},
+    )
+
+    notification.set_message_text("200000")
+    manage_handlers.installment_steps(notification)
+
+    assert "Первоначальный взнос не может превышать" in notification.answers[-1]
+    assert state_manager.get_state(worker_user.phone) == States.INSTALLMENT_DOWN_PAYMENT.value
 
 
 @pytest.mark.usefixtures("keyboard_spy")
@@ -286,12 +369,12 @@ def test_admin_full_report_choice_period(session, admin_user):
 def test_admin_full_report_choice_quick(monkeypatch, admin_user):
     captured = {}
 
-    def fake_report(start, end, session=None):
+    def fake_bundle(start, end, session=None):
         captured["start"] = start
         captured["end"] = end
-        return "FULL REPORT"
+        return "FULL REPORT", None
 
-    monkeypatch.setattr(admin_handlers.admin_service, "build_full_report", fake_report)
+    monkeypatch.setattr(admin_handlers.admin_service, "build_full_report_bundle", fake_bundle)
 
     notification = FakeNotification(admin_user.phone)
     admin_handlers.handle_full_report_choice(notification, "За день")
@@ -303,8 +386,8 @@ def test_admin_full_report_choice_quick(monkeypatch, admin_user):
 def test_admin_full_report_custom_flow(monkeypatch, admin_user):
     monkeypatch.setattr(
         admin_handlers.admin_service,
-        "build_full_report",
-        lambda start, end, session=None: f"FULL {start} {end}",
+        "build_full_report_bundle",
+        lambda start, end, session=None: (f"FULL {start} {end}", None),
     )
     state_manager = DummyStateManager()
     notification = FakeNotification(admin_user.phone, state_manager=state_manager)
