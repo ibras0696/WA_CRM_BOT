@@ -253,6 +253,7 @@ def deal_steps(notification: Notification) -> None:
         )
         if balance_after is not None:
             message += f"\n💼 Баланс: {format_amount(balance_after)}"
+        message += f"\n\n{WORKER_MENU_HINT}"
         notification.answer(message)
 
 
@@ -362,7 +363,8 @@ def installment_steps(notification: Notification) -> None:
             f"Наценка: {format_amount(markup)} ({percent}%)\n"
             f"Первый взнос: {format_amount(down_payment)}\n"
             f"Сумма рассрочки: {format_amount(total)}\n"
-            f"Ежемесячный платёж: {format_amount(monthly)}"
+            f"Ежемесячный платёж: {format_amount(monthly)}\n\n"
+            f"{WORKER_MENU_HINT}"
         )
 def _send_balance(notification: Notification) -> None:
     try:
