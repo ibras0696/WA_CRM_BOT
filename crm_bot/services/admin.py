@@ -13,7 +13,7 @@ import tempfile
 from sqlalchemy import func, case, or_
 
 from crm_bot.core.db import db_session
-from crm_bot.core.models import Deal, User, UserRole, DealPaymentMethod, DealType, Shift
+from crm_bot.core.models import Deal, User, UserRole, DealPaymentMethod, DealType, Shift, ShiftStatus
 from crm_bot.services import users as user_service
 from crm_bot.services import shifts as shift_service
 from crm_bot.services import deals as deal_service
@@ -285,6 +285,45 @@ def _aggregate_for_type(session, filters: list, deal_type: DealType):
 def build_today_summary(session=None) -> str:
     today = datetime.now(MOSCOW_TZ).date()
     return build_deals_report(today, today, session=session)
+
+
+def build_today_balances(session=None) -> str:
+    """Показывает текущие остатки по открытым сменам."""
+    today = datetime.now(MOSCOW_TZ).date()
+    with db_session(session=session) as local:
+        rows = (
+            local.query(
+                User.name,
+                User.phone,
+                Shift.current_balance_cash,
+                Shift.current_balance_bank,
+            )
+            .join(User, User.id == Shift.worker_id)
+            .filter(Shift.status == ShiftStatus.OPEN)
+            .order_by(User.name)
+            .all()
+        )
+        if not rows:
+            return f"📆 Баланс на {today:%d.%m.%Y}\nНет открытых смен."
+
+        total_cash = sum(_as_decimal(row.current_balance_cash) for row in rows)
+        total_bank = sum(_as_decimal(row.current_balance_bank) for row in rows)
+        lines = [
+            f"📆 Баланс на {today:%d.%m.%Y}",
+            f"Открытых смен: {len(rows)}",
+            f"Общий баланс: {_format_money(total_cash + total_bank)}",
+            f"Наличка: {_format_money(total_cash)}",
+            f"Банк: {_format_money(total_bank)}",
+        ]
+        lines.append("\n👥 Сотрудники:")
+        for row in rows:
+            cash = _as_decimal(row.current_balance_cash)
+            bank = _as_decimal(row.current_balance_bank)
+            worker_label = row.name or row.phone or "Не указан"
+            lines.append(
+                f"• {worker_label}: нал {_format_money(cash)}, банк {_format_money(bank)}, итог {_format_money(cash + bank)}"
+            )
+        return "\n".join(lines)
 
 
 def build_full_report(

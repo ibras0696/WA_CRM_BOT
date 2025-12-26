@@ -280,6 +280,51 @@ def test_installment_down_payment_validation(worker_user):
 
 
 @pytest.mark.usefixtures("keyboard_spy")
+def test_installment_down_payment_returns_balance(session, worker_user):
+    shift_service.open_shift(worker_user, 500, 0, session=session)
+    state_manager = DummyStateManager()
+    notification = FakeNotification(worker_user.phone, state_manager=state_manager)
+
+    manage_handlers.worker_buttons_handler(notification, "Выдача рассрочки")
+    notification.set_message_text("100")
+    manage_handlers.installment_steps(notification)
+    notification.set_message_text("20")
+    manage_handlers.installment_steps(notification)
+    notification.set_message_text("5")
+    manage_handlers.installment_steps(notification)
+    notification.set_message_text("30")
+    manage_handlers.installment_steps(notification)
+    notification.set_message_text("Наличка")
+    manage_handlers.installment_steps(notification)
+
+    session.refresh(shift_service.get_active_shift(worker_user.id, session=session))
+    shift = shift_service.get_active_shift(worker_user.id, session=session)
+    assert shift.current_balance_cash == 500 - Decimal("100") + Decimal("30")
+
+
+@pytest.mark.usefixtures("keyboard_spy")
+def test_installment_down_payment_expands_limit(session, worker_user):
+    shift_service.open_shift(worker_user, 50, 0, session=session)
+    state_manager = DummyStateManager()
+    notification = FakeNotification(worker_user.phone, state_manager=state_manager)
+
+    manage_handlers.worker_buttons_handler(notification, "Выдача рассрочки")
+    notification.set_message_text("100")
+    manage_handlers.installment_steps(notification)
+    notification.set_message_text("10")
+    manage_handlers.installment_steps(notification)
+    notification.set_message_text("6")
+    manage_handlers.installment_steps(notification)
+    notification.set_message_text("60")
+    manage_handlers.installment_steps(notification)
+    notification.set_message_text("Наличка")
+    manage_handlers.installment_steps(notification)
+
+    shift = shift_service.get_active_shift(worker_user.id, session=session)
+    assert shift.current_balance_cash == Decimal("10")
+
+
+@pytest.mark.usefixtures("keyboard_spy")
 def test_admin_adjust_balance_flow(session, admin_user, worker_user):
     """Админ: корректировка баланса через два шага FSM."""
     shift_service.open_shift(worker_user, 200, 0, session=session)
@@ -340,8 +385,7 @@ def test_admin_report_flow(session, admin_user, worker_user):
     state_manager = DummyStateManager()
     notification = FakeNotification(admin_user.phone, state_manager=state_manager)
 
-    admin_handlers.admin_buttons_handler(notification, "Отчёт")
-    assert state_manager.get_state(admin_user.phone) == AdminAnalyticsStates.MANAGER_REPORT.value
+    state_manager.set_state(admin_user.phone, AdminAnalyticsStates.MANAGER_REPORT.value)
 
     notification.set_message_text(f"2025-01-01 2025-12-31 {worker_user.phone}")
     admin_handlers.admin_manager_report(notification)
@@ -356,6 +400,22 @@ def test_admin_full_report_menu_sends_buttons(admin_user):
 
     admin_handlers.admin_buttons_handler(notification, "Полный отчёт")
     assert state_manager.get_state(admin_user.phone) is None
+
+
+@pytest.mark.usefixtures("keyboard_spy")
+def test_admin_balance_today_button(session, admin_user, worker_user):
+    shift_service.open_shift(worker_user, 200, 50, session=session)
+    other = User(phone="72222222222@c.us", role=UserRole.WORKER, is_active=True)
+    session.add(other)
+    session.flush()
+    shift_service.open_shift(other, 100, 25, session=session)
+    session.commit()
+
+    notification = FakeNotification(admin_user.phone, state_manager=DummyStateManager())
+    admin_handlers.admin_buttons_handler(notification, "Баланс на сегодня")
+
+    assert "Открытых смен: 2" in notification.answers[-1]
+    assert "Общий баланс" in notification.answers[-1]
 
 
 def test_admin_full_report_choice_period(session, admin_user):

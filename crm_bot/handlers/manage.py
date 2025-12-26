@@ -474,8 +474,8 @@ def installment_steps(notification: Notification) -> None:
             notification.answer(_with_worker_hint(PAYMENT_METHOD_RETRY))
             return
         try:
-            user = user_service.get_active_user_by_phone(notification.sender)
-            if not user:
+            worker = user_service.get_active_user_by_phone(notification.sender)
+            if not worker:
                 raise Exception("Нет доступа. Обратитесь к админу.")
             price, percent, markup, total = _calc_installment_total(data)
             term = int(data.get("installment_term"))
@@ -487,7 +487,7 @@ def installment_steps(notification: Notification) -> None:
                 Decimal("1"), rounding=ROUND_HALF_UP
             )
             deal = deal_service.create_deal(
-                worker=user,
+                worker=worker,
                 client_name=None,
                 client_phone=None,
                 total_amount=-price,
@@ -502,7 +502,18 @@ def installment_steps(notification: Notification) -> None:
                     "installment_total_amount": total,
                     "monthly_payment_amount": monthly,
                 },
+                limit_buffer=down_payment,
             )
+            if down_payment > 0:
+                try:
+                    shift_service.adjust_balance(
+                        worker,
+                        down_payment,
+                        method=method,
+                        created_by=worker,
+                    )
+                except Exception as balance_exc:  # noqa: BLE001
+                    logging.exception("failed to return down payment: %s", balance_exc)
         except Exception as exc:  # noqa: BLE001
             notification.answer(str(exc))
             return
@@ -518,6 +529,7 @@ def installment_steps(notification: Notification) -> None:
         )
         notification.state_manager.delete_state(notification.sender)
         _start_installment_flow(notification)
+
 def _send_balance(notification: Notification) -> None:
     try:
         user = user_service.get_active_user_by_phone(notification.sender)

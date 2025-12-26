@@ -60,6 +60,7 @@ def create_deal(
     *,
     deal_type: DealType = DealType.OPERATION,
     installment_data: dict | None = None,
+    limit_buffer: float | int | str | Decimal = 0,
     session=None,
 ) -> Deal:
     """Создаёт операцию с изменением текущего баланса смены.
@@ -79,6 +80,10 @@ def create_deal(
     normalized_comment = (comment or "").strip() or None
     method = payment_method or DealPaymentMethod.CASH
 
+    buffer_amount = _as_decimal(limit_buffer)
+    if buffer_amount < 0:
+        buffer_amount = Decimal("0")
+
     with db_session(session=session) as local:
         shift: Shift | None = (
             local.query(Shift)
@@ -94,7 +99,7 @@ def create_deal(
         cash_balance = Decimal(shift.current_balance_cash or 0)
         bank_balance = Decimal(shift.current_balance_bank or 0)
         target_balance = cash_balance if method == DealPaymentMethod.CASH else bank_balance
-        if amount < 0 and target_balance + amount < 0:
+        if amount < 0 and target_balance + amount + buffer_amount < 0:
             raise ValidationError("Недостаточно лимита для списания.")
 
         deal = Deal(

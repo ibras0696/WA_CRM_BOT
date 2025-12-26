@@ -31,7 +31,6 @@ ADMIN_MENU_BUTTONS = [
     "Отключить сотрудника",
     "Корректировка баланса",
     "Удалить операцию",
-    "Отчёт",
     "Отчёт за день",
     "Полный отчёт",
 ]
@@ -117,24 +116,21 @@ def admin_buttons_handler(notification: Notification, txt: str) -> None:
                 notification.sender,
                 AdminDeleteDealStates.DEAL_ID.value,
             )
-        case "Отчёт":
-            notification.answer(
-                _with_admin_hint(
-                    "📅 Введите даты отчёта: начало и (опционально) конец + номер сотрудника.\n"
-                    "Формат: YYYY-MM-DD [YYYY-MM-DD] [номер]\n"
-                    "Пример: 2025-01-01 2025-01-31 79991234567"
-                )
-            )
-            notification.state_manager.set_state(
-                notification.sender,
-                AdminAnalyticsStates.MANAGER_REPORT.value,
-            )
-        case "Отчёт за день":
+        case "Баланс на сегодня" | "Отчёт за день":
             try:
-                report = admin_service.build_today_summary()
+                report = admin_service.build_today_balances()
                 notification.answer(report)
             except Exception as exc:  # noqa: BLE001
                 notification.answer(str(exc))
+        case "Отчёт":
+            notification.answer(
+                _with_admin_hint(
+                    "Команда «Отчёт» больше не отображается в меню.\n"
+                    "Чтобы получить сводку за период, просто отправьте сообщение в формате:\n"
+                    "`YYYY-MM-DD [YYYY-MM-DD] [номер]`.\n"
+                    "Пример: `2025-01-01 2025-01-31 79991234567`."
+                )
+            )
         case "Полный отчёт":
             _send_full_report_menu(notification)
         case _ if txt in FULL_REPORT_BUTTONS:
