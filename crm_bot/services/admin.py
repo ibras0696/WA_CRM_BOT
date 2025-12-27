@@ -326,6 +326,43 @@ def build_today_balances(session=None) -> str:
         return "\n".join(lines)
 
 
+def build_workers_balance_overview(session=None) -> str:
+    """Возвращает список активных сотрудников и их остатков."""
+    with db_session(session=session) as local:
+        rows = (
+            local.query(
+                User.name,
+                User.phone,
+                Shift.current_balance_cash,
+                Shift.current_balance_bank,
+            )
+            .outerjoin(
+                Shift,
+                (Shift.worker_id == User.id) & (Shift.status == ShiftStatus.OPEN),
+            )
+            .filter(User.role == UserRole.WORKER, User.is_active.is_(True))
+            .order_by(func.coalesce(User.name, User.phone))
+            .all()
+        )
+
+    if not rows:
+        return "Нет активных сотрудников."
+
+    lines = ["Сотрудники и остатки:"]
+    for row in rows:
+        label = row.name or row.phone or "Не указан"
+        if row.current_balance_cash is None and row.current_balance_bank is None:
+            lines.append(f"• {label}: смена не открыта")
+            continue
+        cash = _as_decimal(row.current_balance_cash)
+        bank = _as_decimal(row.current_balance_bank)
+        lines.append(
+            f"• {label}: нал {_format_money(cash)}, банк {_format_money(bank)}"
+        )
+
+    return "\n".join(lines)
+
+
 def build_full_report(
     start: date,
     end: date,

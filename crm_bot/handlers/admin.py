@@ -105,7 +105,9 @@ def admin_buttons_handler(notification: Notification, txt: str) -> None:
                 AdminDeleteManagerStates.SENDER.value,
             )
         case "Корректировка баланса":
-            notification.answer(_with_admin_hint("⚖️ Введите номер сотрудника для корректировки."))
+            overview = admin_service.build_workers_balance_overview()
+            prompt = f"{overview}\n\n⚖️ Введите номер сотрудника для корректировки."
+            notification.answer(_with_admin_hint(prompt))
             notification.state_manager.set_state(
                 notification.sender,
                 AdminAdjustBalanceStates.WORKER_PHONE.value,

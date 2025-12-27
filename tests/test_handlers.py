@@ -334,6 +334,8 @@ def test_admin_adjust_balance_flow(session, admin_user, worker_user):
     notification = FakeNotification(admin_user.phone, state_manager=state_manager)
 
     admin_handlers.admin_buttons_handler(notification, "Корректировка баланса")
+    assert "Сотрудники и остатки" in notification.answers[-1]
+    assert worker_user.phone in notification.answers[-1]
     assert state_manager.get_state(admin_user.phone) == AdminAdjustBalanceStates.WORKER_PHONE.value
 
     notification.set_message_text(worker_user.phone)
