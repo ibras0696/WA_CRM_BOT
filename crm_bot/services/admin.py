@@ -377,6 +377,11 @@ def _collect_full_report_data(
             .one()
         )
         installment_stats = _aggregate_for_type(local, base_filters, DealType.INSTALLMENT)
+        installment_turnover_raw = (
+            local.query(func.coalesce(func.sum(Deal.installment_total_amount), 0))
+            .filter(*(base_filters + [Deal.deal_type == DealType.INSTALLMENT.value]))
+            .scalar()
+        ) or 0
         operation_stats = _aggregate_for_type(local, base_filters, DealType.OPERATION)
 
         detail_rows = (
@@ -421,7 +426,10 @@ def _collect_full_report_data(
             "start": start,
             "end": end,
             "summary": _serialize_aggregate(summary_row),
-            "installments": _serialize_aggregate(installment_stats),
+            "installments": {
+                **_serialize_aggregate(installment_stats),
+                "turnover_total": _as_decimal(installment_turnover_raw),
+            },
             "operations": _serialize_aggregate(operation_stats),
             "details": [
                 {
@@ -496,6 +504,9 @@ def _render_full_report_text(data: dict) -> str:
 
     lines.append("\n📗 Рассрочки")
     lines.extend(render_block(installments))
+    turnover_total = installments.get("turnover_total")
+    if turnover_total is not None:
+        lines.append(f"  Оборот рассрочек (общая сумма): {_format_money(turnover_total)}")
     lines.append("\n💼 Финансовые операции")
     lines.extend(render_block(operations))
 
