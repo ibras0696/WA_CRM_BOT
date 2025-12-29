@@ -463,9 +463,7 @@ def installment_steps(notification: Notification) -> None:
             {"installment_down_payment": str(down_payment)},
         )
         switch_state(notification, States.INSTALLMENT_PAYMENT_METHOD.value)
-        notification.answer(
-            _with_worker_hint("💳 Укажите способ оплаты первого взноса: ⁠ *Наличка*⁠ или ⁠ *Банк*⁠.")
-        )
+        notification.answer(_with_worker_hint(PAYMENT_METHOD_PROMPT))
         return
 
     if state_name == States.INSTALLMENT_PAYMENT_METHOD.value:
